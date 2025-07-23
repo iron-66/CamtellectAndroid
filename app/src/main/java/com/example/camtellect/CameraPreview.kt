@@ -18,7 +18,7 @@ import java.io.File
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
-    onSnapshotReady: (String) -> Unit = {}  // Передадим путь к фото
+    onSnapshotReady: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalContext.current as LifecycleOwner
@@ -82,7 +82,6 @@ fun CameraPreview(
     }
 }
 
-// Helper object to trigger photo capture from Activity
 object CameraPreview {
     var takePicture: (() -> Unit)? = null
 }

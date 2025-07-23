@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -24,6 +25,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
+import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +54,7 @@ fun VoicePromptScreen() {
     var audioFile by remember { mutableStateOf<String?>(null) }
     var photoFile by remember { mutableStateOf<String?>(null) }
     var serverReply by remember { mutableStateOf<String?>(null) }
+    val photoPath = context.filesDir.absolutePath + "/photo.jpg"
 
     val permissions = remember {
         if (Build.VERSION.SDK_INT >= 33)
@@ -73,14 +76,30 @@ fun VoicePromptScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
-        CameraPreview(
-            modifier = Modifier.weight(1f),
-            onSnapshotReady = { path ->
-                photoFile = path
-                sendPromptToServer(context, audioFile, photoFile) { reply ->
-                    serverReply = reply
-                }
-            }
+//        CameraPreview(
+//            modifier = Modifier.weight(1f),
+//            onSnapshotReady = { path ->
+//                photoFile = path
+//                sendPromptToServer(context, audioFile, photoFile) { reply ->
+//                    serverReply = reply
+//                }
+//            }
+//        )
+
+        val videoHtml = """
+            <html>
+              <body style="margin:0;padding:0;overflow:hidden;background:black;">
+                <img src="http://192.168.1.55:8080/video" 
+                     style="width:100vw;height:auto;display:block;" />
+              </body>
+            </html>
+        """.trimIndent()
+
+        CameraWebViewHtml(
+            html = videoHtml,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
         )
 
         Button(
@@ -88,12 +107,25 @@ fun VoicePromptScreen() {
                 if (!isRecording) {
                     ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
                 } else {
+                    // Стопаем аудиозапись
                     context.stopService(Intent(context, AudioRecordService::class.java))
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
-                        audioFile = prefs.getString("last_audio", null)
-                        CameraPreview.takePicture?.invoke()
-                    }, 1000)
+                    // Достаём путь к аудио
+                    val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
+                    audioFile = prefs.getString("last_audio", null)
+                    // Качаем фото с IP Webcam
+                    downloadPhotoFromIpWebcam(
+                        url = "http://192.168.1.55:8080/photo.jpg",
+                        outputPath = photoPath,
+                        onComplete = { ok ->
+                            if (ok) {
+                                photoFile = photoPath
+                                // Отправляем на сервер
+                                sendPromptToServer(context, audioFile, photoFile) { reply ->
+                                    serverReply = reply
+                                }
+                            }
+                        }
+                    )
                 }
                 isRecording = !isRecording
             },
@@ -113,6 +145,30 @@ fun VoicePromptScreen() {
         }
     }
 }
+
+fun downloadPhotoFromIpWebcam(
+    url: String,
+    outputPath: String,
+    onComplete: (Boolean) -> Unit
+) {
+    val client = OkHttpClient()
+    val request = Request.Builder().url(url).build()
+    client.newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            onComplete(false)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            response.body?.byteStream()?.use { input ->
+                File(outputPath).outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            onComplete(true)
+        }
+    })
+}
+
 
 fun sendPromptToServer(context: android.content.Context, audioPath: String?, photoPath: String?, onReply: (String?) -> Unit) {
     if (audioPath.isNullOrEmpty() || photoPath.isNullOrEmpty()) {
