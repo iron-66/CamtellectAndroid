@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.secrets.gradle.plugin)
 }
 
 android {
@@ -16,6 +17,7 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "PORCUPINE_KEY", "\"${project.properties["PORCUPINE_KEY"] ?: ""}\"")
     }
 
     buildTypes {
@@ -36,11 +38,11 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -53,7 +55,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.video)
     implementation(libs.androidx.camera.view)
-    implementation("androidx.webkit:webkit:1.14.0")
+    implementation(libs.androidx.webkit)
+    implementation(libs.porcupine.android)
     implementation(libs.ui)
     implementation(libs.androidx.activity.compose.v190)
     implementation(libs.androidx.camera.core)

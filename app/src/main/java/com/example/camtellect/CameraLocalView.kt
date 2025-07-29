@@ -1,6 +1,5 @@
 package com.example.camtellect
 
-import android.content.Context
 import android.os.Environment
 import android.util.Log
 import android.view.ViewGroup

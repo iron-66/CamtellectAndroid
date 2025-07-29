@@ -1,6 +1,6 @@
 [versions]
 activityComposeVersion = "1.9.0"
-agp = "8.11.0"
+agp = "8.11.1"
 cameraCamera2 = "1.4.2"
 kotlin = "2.0.21"
 coreKtx = "1.16.0"
@@ -12,8 +12,10 @@ lifecycleRuntimeKtx = "2.9.1"
 activityCompose = "1.10.1"
 composeBom = "2024.09.00"
 okhttp = "4.12.0"
+porcupineAndroid = "3.0.3"
 ui = "1.8.3"
 cameraCore = "1.4.2"
+webkit = "1.14.0"
 
 [libraries]
 androidx-activity-compose-v190 = { module = "androidx.activity:activity-compose", version.ref = "activityComposeVersion" }
@@ -22,6 +24,7 @@ androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", versi
 androidx-camera-video = { module = "androidx.camera:camera-video", version.ref = "cameraCamera2" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "cameraCamera2" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -37,6 +40,7 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 libvlc-all = { module = "org.videolan.android:libvlc-all", version.ref = "libvlcAll" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+porcupine-android = { module = "ai.picovoice:porcupine-android", version.ref = "porcupineAndroid" }
 ui = { module = "androidx.compose.ui:ui", version.ref = "ui" }
 androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraCore" }
 
@@ -44,4 +48,4 @@ androidx-camera-core = { group = "androidx.camera", name = "camera-core", versio
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-
+secrets-gradle-plugin = { id = "com.google.android.libraries.mapsplatform.secrets-gradle-plugin", version = "2.0.1" }

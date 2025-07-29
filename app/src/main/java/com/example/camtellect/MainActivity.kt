@@ -7,8 +7,6 @@ import android.content.Context.MODE_PRIVATE
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,7 +15,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -26,8 +23,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 import java.io.IOException
+import ai.picovoice.porcupine.PorcupineManager
+import ai.picovoice.porcupine.PorcupineManagerCallback
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 
 class MainActivity : ComponentActivity() {
+    private var porcupineManager: PorcupineManager? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -41,9 +45,35 @@ class MainActivity : ComponentActivity() {
                 .createNotificationChannel(channel)
         }
 
+        setupPorcupine()
         setContent {
             VoicePromptScreen()
         }
+    }
+
+    private fun setupPorcupine() {
+        porcupineManager = PorcupineManager.Builder()
+            .setAccessKey(BuildConfig.PORCUPINE_KEY)
+            .setKeywordPaths(listOf("what_is_this.ppn").toTypedArray())
+            .setSensitivity(0.7f)
+            .build(applicationContext, object: PorcupineManagerCallback {
+                override fun invoke(keywordIndex: Int) {
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(this@MainActivity, "Wake-word detected!", Toast.LENGTH_SHORT).show()
+
+                        WakeWordTrigger.shouldTakeAndSendPhoto = true
+                        WakeWordTrigger.appContext = applicationContext
+                        CameraPreview.takePicture?.invoke()
+                    }
+                }
+            })
+        porcupineManager?.start()
+    }
+
+    override fun onDestroy() {
+        porcupineManager?.stop()
+        porcupineManager?.delete()
+        super.onDestroy()
     }
 }
 
@@ -76,56 +106,66 @@ fun VoicePromptScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
-//        CameraPreview(
-//            modifier = Modifier.weight(1f),
-//            onSnapshotReady = { path ->
-//                photoFile = path
-//                sendPromptToServer(context, audioFile, photoFile) { reply ->
-//                    serverReply = reply
-//                }
-//            }
-//        )
+        // Preview from device camera
+        CameraPreview(
+            modifier = Modifier.weight(1f),
+            onSnapshotReady = { path ->
+                photoFile = path
+                val ctx = WakeWordTrigger.appContext
 
-        val videoHtml = """
-            <html>
-              <body style="margin:0;padding:0;overflow:hidden;background:black;">
-                <img src="http://192.168.1.55:8080/video" 
-                     style="width:100vw;height:auto;display:block;" />
-              </body>
-            </html>
-        """.trimIndent()
-
-        CameraWebViewHtml(
-            html = videoHtml,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
+                if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
+                    WakeWordTrigger.shouldTakeAndSendPhoto = false
+                    android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$photoFile")
+                    sendPhotoOnlyToServer(ctx, path) { reply ->
+                        serverReply = reply
+                    }
+                }
+            }
         )
+
+
+        // Preview from wireless camera
+//        val videoHtml = """
+//            <html>
+//              <body style="margin:0;padding:0;overflow:hidden;background:black;">
+//                <img src="http://192.168.1.55:8080/video"
+//                     style="width:100vw;height:auto;display:block;" />
+//              </body>
+//            </html>
+//        """.trimIndent()
+//
+//        CameraWebViewHtml(
+//            html = videoHtml,
+//            modifier = Modifier
+//                .fillMaxWidth()
+//                .aspectRatio(16f / 9f)
+//        )
 
         Button(
             onClick = {
                 if (!isRecording) {
                     ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
                 } else {
-                    // Стопаем аудиозапись
                     context.stopService(Intent(context, AudioRecordService::class.java))
-                    // Достаём путь к аудио
                     val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
                     audioFile = prefs.getString("last_audio", null)
-                    // Качаем фото с IP Webcam
-                    downloadPhotoFromIpWebcam(
-                        url = "http://192.168.1.55:8080/photo.jpg",
-                        outputPath = photoPath,
-                        onComplete = { ok ->
-                            if (ok) {
-                                photoFile = photoPath
-                                // Отправляем на сервер
-                                sendPromptToServer(context, audioFile, photoFile) { reply ->
-                                    serverReply = reply
-                                }
-                            }
-                        }
-                    )
+
+                    // For device camera
+                    CameraPreview.takePicture?.invoke()
+
+                    // For wireless camera
+//                    downloadPhotoFromIpWebcam(
+//                        url = "http://192.168.1.55:8080/photo.jpg",
+//                        outputPath = photoPath,
+//                        onComplete = { ok ->
+//                            if (ok) {
+//                                photoFile = photoPath
+//                                sendPromptToServer(context, audioFile, photoFile) { reply ->
+//                                    serverReply = reply
+//                                }
+//                            }
+//                        }
+//                    )
                 }
                 isRecording = !isRecording
             },
@@ -144,6 +184,50 @@ fun VoicePromptScreen() {
             )
         }
     }
+}
+
+object WakeWordTrigger {
+    var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
+    var appContext: android.content.Context? = null
+}
+
+fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, onReply: (String?) -> Unit) {
+    if (photoPath.isNullOrEmpty()) {
+        android.util.Log.e("SEND", "Нет пути к фото")
+        return
+    }
+
+    val url = "https://devicio.org/process"
+    val photoFile = File(photoPath)
+    if (!photoFile.exists()) {
+        android.util.Log.e("SEND", "Файл не найден: $photoPath")
+        return
+    }
+
+    val client = OkHttpClient()
+    val requestBody = MultipartBody.Builder()
+        .setType(MultipartBody.FORM)
+        .addFormDataPart("image", photoFile.name, photoFile.asRequestBody("image/jpeg".toMediaType()))
+        .build()
+
+    val request = Request.Builder()
+        .url(url)
+        .post(requestBody)
+        .build()
+
+    client.newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            android.util.Log.e("SEND", "Ошибка отправки фото: ${e.message}", e)
+            onReply(null)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            val respString = response.body?.string()
+            android.util.Log.i("SEND", "Ответ сервера (фото): code=${response.code}, body=$respString")
+            response.close()
+            onReply(respString)
+        }
+    })
 }
 
 fun downloadPhotoFromIpWebcam(
