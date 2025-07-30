@@ -27,6 +27,7 @@ import ai.picovoice.porcupine.PorcupineManager
 import ai.picovoice.porcupine.PorcupineManagerCallback
 import android.os.Handler
 import android.os.Looper
+import android.view.WindowManager
 import android.widget.Toast
 
 class MainActivity : ComponentActivity() {
@@ -44,6 +45,12 @@ class MainActivity : ComponentActivity() {
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
+
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+
 
         setupPorcupine()
         setContent {
@@ -120,9 +127,16 @@ fun VoicePromptScreen() {
                         serverReply = reply
                     }
                 }
+
+                if (WakeWordTrigger.shouldSendFullPrompt && ctx != null) {
+                    WakeWordTrigger.shouldSendFullPrompt = false
+                    android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
+                    sendPromptToServer(ctx, audioFile, photoFile) { reply ->
+                        serverReply = reply
+                    }
+                }
             }
         )
-
 
         // Preview from wireless camera
 //        val videoHtml = """
@@ -151,6 +165,8 @@ fun VoicePromptScreen() {
                     audioFile = prefs.getString("last_audio", null)
 
                     // For device camera
+                    WakeWordTrigger.shouldSendFullPrompt = true
+                    WakeWordTrigger.appContext = context
                     CameraPreview.takePicture?.invoke()
 
                     // For wireless camera
@@ -188,6 +204,7 @@ fun VoicePromptScreen() {
 
 object WakeWordTrigger {
     var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
+    var shouldSendFullPrompt: Boolean by mutableStateOf(false)
     var appContext: android.content.Context? = null
 }
 
