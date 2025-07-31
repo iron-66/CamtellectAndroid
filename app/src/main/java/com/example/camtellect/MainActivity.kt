@@ -29,12 +29,16 @@ import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var porcupineManager: PorcupineManager? = null
+    private lateinit var tts: TextToSpeech
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        tts = TextToSpeech(this, this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -54,8 +58,22 @@ class MainActivity : ComponentActivity() {
 
         setupPorcupine()
         setContent {
-            VoicePromptScreen()
+            VoicePromptScreen(tts)
         }
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts.language = Locale.UK
+        }
+    }
+
+    override fun onDestroy() {
+        tts.stop()
+        tts.shutdown()
+        porcupineManager?.stop()
+        porcupineManager?.delete()
+        super.onDestroy()
     }
 
     private fun setupPorcupine() {
@@ -76,16 +94,10 @@ class MainActivity : ComponentActivity() {
             })
         porcupineManager?.start()
     }
-
-    override fun onDestroy() {
-        porcupineManager?.stop()
-        porcupineManager?.delete()
-        super.onDestroy()
-    }
 }
 
 @Composable
-fun VoicePromptScreen() {
+fun VoicePromptScreen(tts: TextToSpeech) {
     val context = LocalContext.current
     var isRecording by remember { mutableStateOf(false) }
     var audioFile by remember { mutableStateOf<String?>(null) }
@@ -125,6 +137,7 @@ fun VoicePromptScreen() {
                     android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$photoFile")
                     sendPhotoOnlyToServer(ctx, path) { reply ->
                         serverReply = reply
+                        tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
                     }
                 }
 
