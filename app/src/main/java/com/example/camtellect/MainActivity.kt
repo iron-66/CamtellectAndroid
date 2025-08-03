@@ -30,6 +30,9 @@ import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
 import android.speech.tts.TextToSpeech
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Settings
 import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -103,7 +106,22 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var audioFile by remember { mutableStateOf<String?>(null) }
     var photoFile by remember { mutableStateOf<String?>(null) }
     var serverReply by remember { mutableStateOf<String?>(null) }
+    var isSettingsOpen by remember { mutableStateOf(false) }
     val photoPath = context.filesDir.absolutePath + "/photo.jpg"
+
+    var ipAddress by remember { mutableStateOf("") }
+    var allowBackground by remember { mutableStateOf(false) }
+
+    if (isSettingsOpen) {
+        SettingsScreen(
+            currentIp = ipAddress,
+            allowBackground = allowBackground,
+            onIpChange = { ipAddress = it },
+            onAllowBackgroundChange = { allowBackground = it },
+            onBack = { isSettingsOpen = false }
+        )
+        return
+    }
 
     val permissions = remember {
         if (Build.VERSION.SDK_INT >= 33)
@@ -113,107 +131,95 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
-    }
+    ) { _ -> }
     LaunchedEffect(Unit) {
         permissionLauncher.launch(permissions)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.SpaceEvenly
-    ) {
-        // Preview from device camera
-        CameraPreview(
-            modifier = Modifier.weight(1f),
-            onSnapshotReady = { path ->
-                photoFile = path
-                val ctx = WakeWordTrigger.appContext
-
-                if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
-                    WakeWordTrigger.shouldTakeAndSendPhoto = false
-                    android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$photoFile")
-                    sendPhotoOnlyToServer(ctx, path) { reply ->
-                        serverReply = reply
-                        tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
-                    }
+    Scaffold(
+        bottomBar = {
+            BottomAppBar {
+                IconButton(onClick = {
+                }) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = "Switch Camera")
                 }
 
-                if (WakeWordTrigger.shouldSendFullPrompt && ctx != null) {
-                    WakeWordTrigger.shouldSendFullPrompt = false
-                    android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
-                    sendPromptToServer(ctx, audioFile, photoFile) { reply ->
-                        serverReply = reply
+                Spacer(modifier = Modifier.weight(1f))
+
+                Button(
+                    onClick = {
+                        if (!isRecording) {
+                            ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
+                        } else {
+                            context.stopService(Intent(context, AudioRecordService::class.java))
+                            val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
+                            audioFile = prefs.getString("last_audio", null)
+
+                            WakeWordTrigger.shouldSendFullPrompt = true
+                            WakeWordTrigger.appContext = context
+                            CameraPreview.takePicture?.invoke()
+                        }
+                        isRecording = !isRecording
                     }
+                ) {
+                    Text(if (!isRecording) "🎤 Record" else "■ Stop")
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                IconButton(onClick = {
+                    isSettingsOpen = true
+                }) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings")
                 }
             }
-        )
-
-        // Preview from wireless camera
-//        val videoHtml = """
-//            <html>
-//              <body style="margin:0;padding:0;overflow:hidden;background:black;">
-//                <img src="http://192.168.1.55:8080/video"
-//                     style="width:100vw;height:auto;display:block;" />
-//              </body>
-//            </html>
-//        """.trimIndent()
-//
-//        CameraWebViewHtml(
-//            html = videoHtml,
-//            modifier = Modifier
-//                .fillMaxWidth()
-//                .aspectRatio(16f / 9f)
-//        )
-
-        Button(
-            onClick = {
-                if (!isRecording) {
-                    ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
-                } else {
-                    context.stopService(Intent(context, AudioRecordService::class.java))
-                    val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
-                    audioFile = prefs.getString("last_audio", null)
-
-                    // For device camera
-                    WakeWordTrigger.shouldSendFullPrompt = true
-                    WakeWordTrigger.appContext = context
-                    CameraPreview.takePicture?.invoke()
-
-                    // For wireless camera
-//                    downloadPhotoFromIpWebcam(
-//                        url = "http://192.168.1.55:8080/photo.jpg",
-//                        outputPath = photoPath,
-//                        onComplete = { ok ->
-//                            if (ok) {
-//                                photoFile = photoPath
-//                                sendPromptToServer(context, audioFile, photoFile) { reply ->
-//                                    serverReply = reply
-//                                }
-//                            }
-//                        }
-//                    )
-                }
-                isRecording = !isRecording
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(if (!isRecording) "🎤 Record" else "■ Stop")
         }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.SpaceEvenly
+        ) {
+            CameraPreview(
+                modifier = Modifier.weight(1f),
+                onSnapshotReady = { path ->
+                    photoFile = path
+                    val ctx = WakeWordTrigger.appContext
 
-        if (serverReply != null) {
-            Text(
-                text = "Response:\n$serverReply",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 24.dp),
-                style = MaterialTheme.typography.bodyLarge
+                    if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
+                        WakeWordTrigger.shouldTakeAndSendPhoto = false
+                        android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$photoFile")
+                        sendPhotoOnlyToServer(ctx, path) { reply ->
+                            serverReply = reply
+                            tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                    }
+
+                    if (WakeWordTrigger.shouldSendFullPrompt && ctx != null) {
+                        WakeWordTrigger.shouldSendFullPrompt = false
+                        android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
+                        sendPromptToServer(ctx, audioFile, photoFile) { reply ->
+                            serverReply = reply
+                        }
+                    }
+                }
             )
+
+            if (serverReply != null) {
+                Text(
+                    text = "Response:\n$serverReply",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 24.dp),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
         }
     }
 }
+
 
 object WakeWordTrigger {
     var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
@@ -223,14 +229,14 @@ object WakeWordTrigger {
 
 fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, onReply: (String?) -> Unit) {
     if (photoPath.isNullOrEmpty()) {
-        android.util.Log.e("SEND", "Нет пути к фото")
+        android.util.Log.e("SEND", "No path to photo")
         return
     }
 
     val url = "https://devicio.org/process"
     val photoFile = File(photoPath)
     if (!photoFile.exists()) {
-        android.util.Log.e("SEND", "Файл не найден: $photoPath")
+        android.util.Log.e("SEND", "File not found: $photoPath")
         return
     }
 
@@ -247,13 +253,13 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
 
     client.newCall(request).enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
-            android.util.Log.e("SEND", "Ошибка отправки фото: ${e.message}", e)
+            android.util.Log.e("SEND", "Error sending photo: ${e.message}", e)
             onReply(null)
         }
 
         override fun onResponse(call: Call, response: Response) {
             val respString = response.body?.string()
-            android.util.Log.i("SEND", "Ответ сервера (фото): code=${response.code}, body=$respString")
+            android.util.Log.i("SEND", "Server response (photo): code=${response.code}, body=$respString")
             response.close()
             onReply(respString)
         }
@@ -286,17 +292,17 @@ fun downloadPhotoFromIpWebcam(
 
 fun sendPromptToServer(context: android.content.Context, audioPath: String?, photoPath: String?, onReply: (String?) -> Unit) {
     if (audioPath.isNullOrEmpty() || photoPath.isNullOrEmpty()) {
-        android.util.Log.e("SEND", "Файлы не найдены: audio=$audioPath, photo=$photoPath")
+        android.util.Log.e("SEND", "Files not found: audio=$audioPath, photo=$photoPath")
         return
     }
-    android.util.Log.i("SEND", "Пробуем отправить audio=$audioPath, photo=$photoPath")
+    android.util.Log.i("SEND", "Trying to send audio=$audioPath, photo=$photoPath")
 
     val url = "https://devicio.org/process"
 
     val audioFile = File(audioPath)
     val photoFile = File(photoPath)
-    if (!audioFile.exists()) android.util.Log.e("SEND", "Нет файла audio: $audioPath")
-    if (!photoFile.exists()) android.util.Log.e("SEND", "Нет файла photo: $photoPath")
+    if (!audioFile.exists()) android.util.Log.e("SEND", "No audio file: $audioPath")
+    if (!photoFile.exists()) android.util.Log.e("SEND", "No photo file: $photoPath")
 
     val client = OkHttpClient()
     val requestBody = MultipartBody.Builder()
@@ -310,12 +316,12 @@ fun sendPromptToServer(context: android.content.Context, audioPath: String?, pho
         .build()
     client.newCall(request).enqueue(object: Callback {
         override fun onFailure(call: Call, e: java.io.IOException) {
-            android.util.Log.e("SEND", "Ошибка отправки: ${e.message}", e)
+            android.util.Log.e("SEND", "Send error: ${e.message}", e)
             onReply(null)
         }
         override fun onResponse(call: Call, response: Response) {
             val respString = response.body?.string()
-            android.util.Log.i("SEND", "Ответ сервера: code=${response.code}, body=$respString")
+            android.util.Log.i("SEND", "Server response: code=${response.code}, body=$respString")
             response.close()
             onReply(respString)
         }

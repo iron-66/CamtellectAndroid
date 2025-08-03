@@ -62,6 +62,7 @@ dependencies {
     implementation(libs.androidx.camera.core)
     implementation(libs.okhttp)
     implementation(libs.libvlc.all)
+    implementation(libs.androidx.material.icons.extended)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
