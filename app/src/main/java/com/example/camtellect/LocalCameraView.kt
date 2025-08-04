@@ -17,6 +17,7 @@ import java.io.File
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
+    lensFacing: Int = CameraSelector.LENS_FACING_BACK,
     onSnapshotReady: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -41,9 +42,12 @@ fun CameraPreview(
                 imageCapture = ImageCapture.Builder().build()
                 try {
                     cameraProvider.unbindAll()
+                    val selector = CameraSelector.Builder()
+                        .requireLensFacing(lensFacing)
+                        .build()
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        selector,
                         preview,
                         imageCapture
                     )
@@ -54,8 +58,6 @@ fun CameraPreview(
             previewView
         }
     )
-
-    // expose imageCapture "take photo" method
     LaunchedEffect(imageCapture) {
         CameraPreview.takePicture = {
             imageCapture?.let { capture ->

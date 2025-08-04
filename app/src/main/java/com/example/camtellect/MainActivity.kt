@@ -30,6 +30,7 @@ import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
 import android.speech.tts.TextToSpeech
+import androidx.camera.core.CameraSelector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
@@ -57,7 +58,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
-
 
         setupPorcupine()
         setContent {
@@ -99,6 +99,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 }
 
+data class CameraOption(val id: String, val label: String)
+
+fun getCameraOptions(): List<CameraOption> {
+    return listOf(
+        CameraOption("back", "Back Camera"),
+        CameraOption("front", "Front Camera"),
+        CameraOption("wireless", "Wireless Camera")
+    )
+}
+
 @Composable
 fun VoicePromptScreen(tts: TextToSpeech) {
     val context = LocalContext.current
@@ -107,10 +117,12 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var photoFile by remember { mutableStateOf<String?>(null) }
     var serverReply by remember { mutableStateOf<String?>(null) }
     var isSettingsOpen by remember { mutableStateOf(false) }
-    val photoPath = context.filesDir.absolutePath + "/photo.jpg"
-
     var ipAddress by remember { mutableStateOf("") }
     var allowBackground by remember { mutableStateOf(false) }
+    var cameraMenuOpen by remember { mutableStateOf(false) }
+    var selectedCamera by remember { mutableStateOf("back") }
+    val cameraOptions = getCameraOptions()
+    val photoPath = context.filesDir.absolutePath + "/photo.jpg"
 
     if (isSettingsOpen) {
         SettingsScreen(
@@ -139,9 +151,29 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     Scaffold(
         bottomBar = {
             BottomAppBar {
-                IconButton(onClick = {
-                }) {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = "Switch Camera")
+                Box {
+                    IconButton(onClick = { cameraMenuOpen = true }) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = "Switch Camera")
+                    }
+                    DropdownMenu(
+                        expanded = cameraMenuOpen,
+                        onDismissRequest = { cameraMenuOpen = false }
+                    ) {
+                        cameraOptions.forEach { option ->
+                            val isWireless = option.id == "wireless"
+                            val enabled = !isWireless || ipAddress.isNotEmpty()
+                            DropdownMenuItem(
+                                text = { Text(option.label) },
+                                enabled = enabled,
+                                onClick = {
+                                    if (enabled) {
+                                        selectedCamera = option.id
+                                        cameraMenuOpen = false
+                                    }
+                                }
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
@@ -182,30 +214,21 @@ fun VoicePromptScreen(tts: TextToSpeech) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            CameraPreview(
-                modifier = Modifier.weight(1f),
-                onSnapshotReady = { path ->
-                    photoFile = path
-                    val ctx = WakeWordTrigger.appContext
-
-                    if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
-                        WakeWordTrigger.shouldTakeAndSendPhoto = false
-                        android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$photoFile")
-                        sendPhotoOnlyToServer(ctx, path) { reply ->
-                            serverReply = reply
-                            tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
-                        }
-                    }
-
-                    if (WakeWordTrigger.shouldSendFullPrompt && ctx != null) {
-                        WakeWordTrigger.shouldSendFullPrompt = false
-                        android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
-                        sendPromptToServer(ctx, audioFile, photoFile) { reply ->
-                            serverReply = reply
-                        }
-                    }
+            when (selectedCamera) {
+                "back" -> CameraPreview(
+                    modifier = Modifier.weight(1f),
+                    lensFacing = CameraSelector.LENS_FACING_BACK,
+                    onSnapshotReady = { path -> handleSnapshot(path, tts, serverReplySetter = { serverReply = it }) }
+                )
+                "front" -> CameraPreview(
+                    modifier = Modifier.weight(1f),
+                    lensFacing = CameraSelector.LENS_FACING_FRONT,
+                    onSnapshotReady = { path -> handleSnapshot(path, tts, serverReplySetter = { serverReply = it }) }
+                )
+                "wireless" -> {
+                    Text("Wireless camera (IP: $ipAddress) preview coming soon!")
                 }
-            )
+            }
 
             if (serverReply != null) {
                 Text(
@@ -220,11 +243,33 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     }
 }
 
-
 object WakeWordTrigger {
     var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
     var shouldSendFullPrompt: Boolean by mutableStateOf(false)
     var appContext: android.content.Context? = null
+}
+
+fun handleSnapshot(
+    path: String,
+    tts: TextToSpeech,
+    serverReplySetter: (String?) -> Unit
+) {
+    val ctx = WakeWordTrigger.appContext
+    if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
+        WakeWordTrigger.shouldTakeAndSendPhoto = false
+        android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$path")
+        sendPhotoOnlyToServer(ctx, path) { reply ->
+            serverReplySetter(reply)
+            tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+        }
+    }
+    if (WakeWordTrigger.shouldSendFullPrompt && ctx != null) {
+        WakeWordTrigger.shouldSendFullPrompt = false
+        android.util.Log.i("BTN", "📸 Manual snapshot, sending audio + photo")
+        sendPromptToServer(ctx, null, path) { reply ->
+            serverReplySetter(reply)
+        }
+    }
 }
 
 fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, onReply: (String?) -> Unit) {
@@ -289,7 +334,6 @@ fun downloadPhotoFromIpWebcam(
     })
 }
 
-
 fun sendPromptToServer(context: android.content.Context, audioPath: String?, photoPath: String?, onReply: (String?) -> Unit) {
     if (audioPath.isNullOrEmpty() || photoPath.isNullOrEmpty()) {
         android.util.Log.e("SEND", "Files not found: audio=$audioPath, photo=$photoPath")
@@ -327,4 +371,3 @@ fun sendPromptToServer(context: android.content.Context, audioPath: String?, pho
         }
     })
 }
-
