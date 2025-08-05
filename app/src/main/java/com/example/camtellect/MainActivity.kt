@@ -119,10 +119,11 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var isSettingsOpen by remember { mutableStateOf(false) }
     var ipAddress by remember { mutableStateOf("") }
     var allowBackground by remember { mutableStateOf(false) }
-    var cameraMenuOpen by remember { mutableStateOf(false) }
     var selectedCamera by remember { mutableStateOf("back") }
     val cameraOptions = getCameraOptions()
     val photoPath = context.filesDir.absolutePath + "/photo.jpg"
+    var shouldSendPrompt by remember { mutableStateOf(false) }
+    var pendingAudioFile by remember { mutableStateOf<String?>(null) }
 
     if (isSettingsOpen) {
         SettingsScreen(
@@ -148,63 +149,65 @@ fun VoicePromptScreen(tts: TextToSpeech) {
         permissionLauncher.launch(permissions)
     }
 
+    LaunchedEffect(audioFile, photoFile, shouldSendPrompt) {
+        if (shouldSendPrompt && !audioFile.isNullOrEmpty() && !photoFile.isNullOrEmpty()) {
+            shouldSendPrompt = false
+            android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
+            sendPromptToServer(context, audioFile, photoFile) { reply ->
+                serverReply = reply
+                tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+        }
+    }
+
+    fun onRecordToggle() {
+        if (!isRecording) {
+            ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
+        } else {
+            context.stopService(Intent(context, AudioRecordService::class.java))
+            val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
+            val audio = prefs.getString("last_audio", null)
+            pendingAudioFile = audio
+            CameraPreview.takePicture?.invoke()
+        }
+        isRecording = !isRecording
+    }
+
+    fun onSnapshotReady(path: String) {
+        photoFile = path
+
+        val ctx = WakeWordTrigger.appContext
+        if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
+            WakeWordTrigger.shouldTakeAndSendPhoto = false
+            android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$path")
+            sendPhotoOnlyToServer(ctx, path) { reply ->
+                serverReply = reply
+                tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+        }
+
+        if (!pendingAudioFile.isNullOrEmpty()) {
+            val audioToSend = pendingAudioFile
+            pendingAudioFile = null
+            android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioToSend, photo=$path")
+            sendPromptToServer(context, audioToSend, path) { reply ->
+                serverReply = reply
+                tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
-            BottomAppBar {
-                Box {
-                    IconButton(onClick = { cameraMenuOpen = true }) {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = "Switch Camera")
-                    }
-                    DropdownMenu(
-                        expanded = cameraMenuOpen,
-                        onDismissRequest = { cameraMenuOpen = false }
-                    ) {
-                        cameraOptions.forEach { option ->
-                            val isWireless = option.id == "wireless"
-                            val enabled = !isWireless || ipAddress.isNotEmpty()
-                            DropdownMenuItem(
-                                text = { Text(option.label) },
-                                enabled = enabled,
-                                onClick = {
-                                    if (enabled) {
-                                        selectedCamera = option.id
-                                        cameraMenuOpen = false
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                Button(
-                    onClick = {
-                        if (!isRecording) {
-                            ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
-                        } else {
-                            context.stopService(Intent(context, AudioRecordService::class.java))
-                            val prefs = context.getSharedPreferences("audio", MODE_PRIVATE)
-                            audioFile = prefs.getString("last_audio", null)
-
-                            WakeWordTrigger.shouldSendFullPrompt = true
-                            WakeWordTrigger.appContext = context
-                            CameraPreview.takePicture?.invoke()
-                        }
-                        isRecording = !isRecording
-                    }
-                ) {
-                    Text(if (!isRecording) "🎤 Record" else "■ Stop")
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                IconButton(onClick = {
-                    isSettingsOpen = true
-                }) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings")
-                }
-            }
+            AppBottomBar(
+                cameraOptions = cameraOptions,
+                selectedCamera = selectedCamera,
+                onCameraSelect = { selectedCamera = it },
+                isRecording = isRecording,
+                onRecordToggle = ::onRecordToggle,
+                onSettingsClick = { isSettingsOpen = true },
+                ipAddress = ipAddress
+            )
         }
     ) { innerPadding ->
         Column(
@@ -218,12 +221,12 @@ fun VoicePromptScreen(tts: TextToSpeech) {
                 "back" -> CameraPreview(
                     modifier = Modifier.weight(1f),
                     lensFacing = CameraSelector.LENS_FACING_BACK,
-                    onSnapshotReady = { path -> handleSnapshot(path, tts, serverReplySetter = { serverReply = it }) }
+                    onSnapshotReady = ::onSnapshotReady
                 )
                 "front" -> CameraPreview(
                     modifier = Modifier.weight(1f),
                     lensFacing = CameraSelector.LENS_FACING_FRONT,
-                    onSnapshotReady = { path -> handleSnapshot(path, tts, serverReplySetter = { serverReply = it }) }
+                    onSnapshotReady = ::onSnapshotReady
                 )
                 "wireless" -> {
                     Text("Wireless camera (IP: $ipAddress) preview coming soon!")
