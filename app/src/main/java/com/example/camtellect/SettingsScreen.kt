@@ -40,6 +40,10 @@ fun SettingsScreen(
             Text("Allow the application to run in the background")
         }
 
+        HorizontalDivider()
+
+        Spacer(Modifier.weight(1f))
+
         Button(
             onClick = onBack,
             modifier = Modifier.fillMaxWidth()
