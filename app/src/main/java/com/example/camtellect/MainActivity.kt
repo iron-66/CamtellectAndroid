@@ -115,6 +115,7 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var photoFile by remember { mutableStateOf<String?>(null) }
     var serverReply by remember { mutableStateOf<String?>(null) }
     var isSettingsOpen by remember { mutableStateOf(false) }
+    var isConnectWizardOpen by remember { mutableStateOf(false) }
     var ipAddress by remember { mutableStateOf("") }
     var allowBackground by remember { mutableStateOf(false) }
     var selectedCamera by remember { mutableStateOf("back") }
@@ -217,6 +218,18 @@ fun VoicePromptScreen(tts: TextToSpeech) {
         }
     }
 
+    if (isConnectWizardOpen) {
+        ConnectCameraWizard(
+            onClose = { isConnectWizardOpen = false },
+            onIpChosen = { ip ->
+                ipAddress = ip
+                context.getSharedPreferences("settings", MODE_PRIVATE)
+                    .edit().putString("wireless_ip", ip).apply()
+            }
+        )
+        return
+    }
+
     if (isSettingsOpen) {
         SettingsScreen(
             currentIp = ipAddress,
@@ -224,6 +237,7 @@ fun VoicePromptScreen(tts: TextToSpeech) {
             onIpChange = { ipAddress = it },
             onAllowBackgroundChange = { allowBackground = it },
             onBack = { isSettingsOpen = false },
+            onConnectCamera = { isConnectWizardOpen = true }
         )
         return
     }

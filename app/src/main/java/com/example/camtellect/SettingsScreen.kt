@@ -13,12 +13,11 @@ fun SettingsScreen(
     allowBackground: Boolean,
     onIpChange: (String) -> Unit,
     onAllowBackgroundChange: (Boolean) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onConnectCamera: () -> Unit
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
+        modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         Text(text = "Settings", style = MaterialTheme.typography.headlineMedium)
@@ -38,6 +37,10 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Allow the application to run in the background")
+        }
+
+        Button(onClick = onConnectCamera, modifier = Modifier.fillMaxWidth()) {
+            Text("Connect camera")
         }
 
         HorizontalDivider()
