@@ -22,7 +22,6 @@ import okhttp3.Request
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.time.Duration
-import java.util.concurrent.Semaphore
 
 private enum class WizardStep { Intro, OpenWifiSettings, Scanning, PickResult, Preview, Done }
 
@@ -36,7 +35,6 @@ fun ConnectCameraWizard(
     var step by remember { mutableStateOf(WizardStep.Intro) }
     var candidates by remember { mutableStateOf(listOf<CameraCandidate>()) }
     var selected by remember { mutableStateOf<CameraCandidate?>(null) }
-    var scanning by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     Surface(tonalElevation = 2.dp) {
