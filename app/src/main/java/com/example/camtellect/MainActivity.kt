@@ -32,6 +32,7 @@ import android.widget.Toast
 import android.speech.tts.TextToSpeech
 import androidx.camera.core.CameraSelector
 import java.util.Locale
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var porcupineManager: PorcupineManager? = null
@@ -104,6 +105,24 @@ fun getCameraOptions(): List<CameraOption> {
         CameraOption("front", "Front Camera"),
         CameraOption("wireless", "Wireless Camera")
     )
+}
+
+private fun parseReplyPayload(payload: String?): String? {
+    if (payload.isNullOrBlank()) return null
+    return try {
+        val obj = JSONObject(payload)
+        when {
+            obj.has("reply")    -> obj.optString("reply", null)
+            obj.has("message")  -> obj.optString("message", null)
+            obj.has("text")     -> obj.optString("text", null)
+            else -> payload
+        }
+    } catch (_: Exception) {
+        val s = payload.trim()
+        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+            s.substring(1, s.length - 1)
+        } else s
+    }
 }
 
 @Composable
@@ -311,7 +330,6 @@ fun VoicePromptScreen(tts: TextToSpeech) {
 
 object WakeWordTrigger {
     var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
-    var shouldSendFullPrompt: Boolean by mutableStateOf(false)
     var appContext: android.content.Context? = null
 }
 
@@ -328,10 +346,11 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
         return
     }
 
+    val compressedPhoto = downscaleJpegIfNeeded(photoFile.absolutePath)
     val client = OkHttpClient()
     val requestBody = MultipartBody.Builder()
         .setType(MultipartBody.FORM)
-        .addFormDataPart("image", photoFile.name, photoFile.asRequestBody("image/jpeg".toMediaType()))
+        .addFormDataPart("image", compressedPhoto.name, compressedPhoto.asRequestBody("image/jpeg".toMediaType()))
         .build()
 
     val request = Request.Builder()
@@ -347,11 +366,46 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
 
         override fun onResponse(call: Call, response: Response) {
             val respString = response.body?.string()
+            val replyText = parseReplyPayload(respString)
             android.util.Log.i("SEND", "Server response (photo): code=${response.code}, body=$respString")
             response.close()
-            onReply(respString)
+            onReply(replyText)
         }
     })
+}
+
+private fun downscaleJpegIfNeeded(inputPath: String, maxDim: Int = 1280, quality: Int = 85): File {
+    val src = java.io.File(inputPath)
+    // Быстрая защита: если файл уже небольшой (< 600KB), не трогаем
+    if (src.length() < 600_000) return src
+
+    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(inputPath, opts)
+    val w = opts.outWidth
+    val h = opts.outHeight
+    if (w <= 0 || h <= 0) return src
+
+    var inSample = 1
+    var tw = w
+    var th = h
+    while (tw > maxDim || th > maxDim) { inSample *= 2; tw = w / inSample; th = h / inSample }
+
+    val opts2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = inSample }
+    val bmp = android.graphics.BitmapFactory.decodeFile(inputPath, opts2) ?: return src
+
+    // Второй проход (точное масштабирование по maxDim)
+    val scale = maxOf(bmp.width.toFloat() / maxDim, bmp.height.toFloat() / maxDim, 1f)
+    val outW = (bmp.width / scale).toInt()
+    val outH = (bmp.height / scale).toInt()
+    val scaled = if (scale > 1f) android.graphics.Bitmap.createScaledBitmap(bmp, outW, outH, true) else bmp
+
+    val outFile = java.io.File(src.parentFile, "upload_${System.currentTimeMillis()}.jpg")
+    java.io.FileOutputStream(outFile).use { fos ->
+        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, fos)
+    }
+    if (scaled !== bmp) bmp.recycle()
+    scaled.recycle()
+    return outFile
 }
 
 fun downloadPhotoFromIpWebcam(
@@ -408,9 +462,10 @@ fun sendPromptToServer(context: android.content.Context, audioPath: String?, pho
         }
         override fun onResponse(call: Call, response: Response) {
             val respString = response.body?.string()
+            val replyText = parseReplyPayload(respString)
             android.util.Log.i("SEND", "Server response: code=${response.code}, body=$respString")
             response.close()
-            onReply(respString)
+            onReply(replyText)
         }
     })
 }
