@@ -23,20 +23,18 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 import java.io.IOException
-import ai.picovoice.porcupine.PorcupineManager
-import ai.picovoice.porcupine.PorcupineManagerCallback
-import android.os.Handler
-import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
 import android.speech.tts.TextToSpeech
 import androidx.camera.core.CameraSelector
+import com.example.camtellect.oww.OpenWakeWordEngine
 import java.util.Locale
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
-    private var porcupineManager: PorcupineManager? = null
     private lateinit var tts: TextToSpeech
+    private lateinit var micPermLauncher: androidx.activity.result.ActivityResultLauncher<String>
+    private var oww: OpenWakeWordEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,10 +55,49 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
 
-        setupPorcupine()
-        setContent {
-            VoicePromptScreen(tts)
+        oww = OpenWakeWordEngine(
+            context = this,
+            wakeModelAsset = "oww/weather_v0.1.onnx",
+            threshold = 0.55f
+        ) {
+            WakeWordTrigger.shouldTakeAndSendPhoto = true
+            WakeWordTrigger.appContext = applicationContext
+            CameraPreview.takePicture?.invoke()
+            Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
         }
+        micPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                // стартуем движок только теперь
+                if (oww == null) {
+                    oww = OpenWakeWordEngine(
+                        context = this,
+                        wakeModelAsset = "oww/weather_v0.1.onnx",
+                        threshold = 0.55f
+                    ) {
+                        WakeWordTrigger.shouldTakeAndSendPhoto = true
+                        WakeWordTrigger.appContext = applicationContext
+                        CameraPreview.takePicture?.invoke()
+                        Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                oww?.start()
+            } else {
+                Toast.makeText(this, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // вместо прямого oww?.start() в onCreate — проверка + запрос:
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            // разрешение уже есть — можно стартовать
+            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) // это просто выстрелит granted=true мгновенно
+        } else {
+            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+
+        setContent { VoicePromptScreen(tts) }
     }
 
     override fun onInit(status: Int) {
@@ -70,30 +107,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        tts.stop()
-        tts.shutdown()
-        porcupineManager?.stop()
-        porcupineManager?.delete()
+        oww?.stop()
+        tts.stop(); tts.shutdown()
         super.onDestroy()
-    }
-
-    private fun setupPorcupine() {
-        porcupineManager = PorcupineManager.Builder()
-            .setAccessKey(BuildConfig.PORCUPINE_KEY)
-            .setKeywordPaths(listOf("what_is_this.ppn").toTypedArray())
-            .setSensitivity(0.7f)
-            .build(applicationContext, object: PorcupineManagerCallback {
-                override fun invoke(keywordIndex: Int) {
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(this@MainActivity, "Wake-word detected!", Toast.LENGTH_SHORT).show()
-
-                        WakeWordTrigger.shouldTakeAndSendPhoto = true
-                        WakeWordTrigger.appContext = applicationContext
-                        CameraPreview.takePicture?.invoke()
-                    }
-                }
-            })
-        porcupineManager?.start()
     }
 }
 

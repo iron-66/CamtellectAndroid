@@ -14,6 +14,7 @@ activityCompose = "1.10.1"
 composeBom = "2024.09.00"
 materialIconsExtended = "1.7.8"
 okhttp = "4.12.0"
+onnxruntimeAndroid = "1.22.0"
 porcupineAndroid = "3.0.3"
 ui = "1.8.3"
 cameraCore = "1.4.2"
@@ -44,7 +45,7 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 libvlc-all = { module = "org.videolan.android:libvlc-all", version.ref = "libvlcAll" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
-porcupine-android = { module = "ai.picovoice:porcupine-android", version.ref = "porcupineAndroid" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntimeAndroid" }
 ui = { module = "androidx.compose.ui:ui", version.ref = "ui" }
 androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraCore" }
 
