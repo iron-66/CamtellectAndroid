@@ -26,6 +26,7 @@ import java.io.IOException
 import android.view.WindowManager
 import android.widget.Toast
 import android.speech.tts.TextToSpeech
+import androidx.activity.result.ActivityResultLauncher
 import androidx.camera.core.CameraSelector
 import com.example.camtellect.oww.OpenWakeWordEngine
 import java.util.Locale
@@ -33,7 +34,7 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
-    private lateinit var micPermLauncher: androidx.activity.result.ActivityResultLauncher<String>
+    private lateinit var allPermsLauncher: ActivityResultLauncher<Array<String>>
     private var oww: OpenWakeWordEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,47 +58,70 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         oww = OpenWakeWordEngine(
             context = this,
-            wakeModelAsset = "oww/weather_v0.1.onnx",
-            threshold = 0.55f
+            wakeModelAsset = "oww/what_is_this_.onnx",
+            threshold = 0.015f
         ) {
             WakeWordTrigger.shouldTakeAndSendPhoto = true
             WakeWordTrigger.appContext = applicationContext
             CameraPreview.takePicture?.invoke()
             Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
         }
-        micPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                // стартуем движок только теперь
-                if (oww == null) {
-                    oww = OpenWakeWordEngine(
-                        context = this,
-                        wakeModelAsset = "oww/weather_v0.1.onnx",
-                        threshold = 0.55f
-                    ) {
-                        WakeWordTrigger.shouldTakeAndSendPhoto = true
-                        WakeWordTrigger.appContext = applicationContext
-                        CameraPreview.takePicture?.invoke()
-                        Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
-                    }
-                }
+
+        allPermsLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { results ->
+            val denied = results.filterValues { !it }.keys
+            if (denied.isEmpty()) {
+                // микрофон уже точно есть → можно стартовать
                 oww?.start()
             } else {
-                Toast.makeText(this, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Permissions denied: ${denied.joinToString()}", Toast.LENGTH_SHORT).show()
             }
         }
 
-        // вместо прямого oww?.start() в onCreate — проверка + запрос:
-        if (androidx.core.content.ContextCompat.checkSelfPermission(
-                this, Manifest.permission.RECORD_AUDIO
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            // разрешение уже есть — можно стартовать
-            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) // это просто выстрелит granted=true мгновенно
-        } else {
-            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-
         setContent { VoicePromptScreen(tts) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ensureAllPermissions()
+    }
+
+    private fun ensureAllPermissions() {
+        val perms = requiredPerms()
+        val missing = perms.filter {
+            ContextCompat.checkSelfPermission(this, it) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            allPermsLauncher.launch(missing.toTypedArray())
+        } else {
+            // всё уже выдано
+            oww?.start()
+        }
+    }
+
+    private fun requiredPerms(): Array<String> {
+        val list = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.CAMERA
+        )
+        // Добавляй ТОЛЬКО если реально используешь:
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // для BLE-скана/BT-камер
+            // list += Manifest.permission.BLUETOOTH_CONNECT
+            // list += Manifest.permission.BLUETOOTH_SCAN
+        } else {
+            // для BLE-скана на Android 11-
+            // list += Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // нужно только если сканируешь Wi-Fi устройства поблизости
+            // list += Manifest.permission.NEARBY_WIFI_DEVICES
+            // если нужны уведомления FG-сервиса:
+            // list += Manifest.permission.POST_NOTIFICATIONS
+        }
+        return list.toTypedArray()
     }
 
     override fun onInit(status: Int) {
@@ -158,30 +182,6 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     val photoPath = context.filesDir.absolutePath + "/photo.jpg"
     var shouldSendPrompt by remember { mutableStateOf(false) }
     var pendingAudioFile by remember { mutableStateOf<String?>(null) }
-
-    val neededPerms = remember {
-        if (Build.VERSION.SDK_INT >= 33) {
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.NEARBY_WIFI_DEVICES
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
-        }
-    }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
-
-    LaunchedEffect(Unit) {
-        permissionLauncher.launch(neededPerms)
-    }
 
     LaunchedEffect(audioFile, photoFile, shouldSendPrompt) {
         if (shouldSendPrompt && !audioFile.isNullOrEmpty() && !photoFile.isNullOrEmpty()) {
@@ -363,7 +363,7 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
     }
 
     val compressedPhoto = downscaleJpegIfNeeded(photoFile.absolutePath)
-    val client = OkHttpClient()
+
     val requestBody = MultipartBody.Builder()
         .setType(MultipartBody.FORM)
         .addFormDataPart("image", compressedPhoto.name, compressedPhoto.asRequestBody("image/jpeg".toMediaType()))
@@ -374,7 +374,7 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
         .post(requestBody)
         .build()
 
-    client.newCall(request).enqueue(object : Callback {
+    Http.client.newCall(request).enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
             android.util.Log.e("SEND", "Error sending photo: ${e.message}", e)
             onReply(null)
@@ -461,7 +461,6 @@ fun sendPromptToServer(context: android.content.Context, audioPath: String?, pho
     if (!audioFile.exists()) android.util.Log.e("SEND", "No audio file: $audioPath")
     if (!photoFile.exists()) android.util.Log.e("SEND", "No photo file: $photoPath")
 
-    val client = OkHttpClient()
     val requestBody = MultipartBody.Builder()
         .setType(MultipartBody.FORM)
         .addFormDataPart("audio", audioFile.name, audioFile.asRequestBody("audio/m4a".toMediaType()))
@@ -471,7 +470,7 @@ fun sendPromptToServer(context: android.content.Context, audioPath: String?, pho
         .url(url)
         .post(requestBody)
         .build()
-    client.newCall(request).enqueue(object: Callback {
+    Http.client.newCall(request).enqueue(object: Callback {
         override fun onFailure(call: Call, e: java.io.IOException) {
             android.util.Log.e("SEND", "Send error: ${e.message}", e)
             onReply(null)

@@ -17,7 +17,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "PORCUPINE_KEY", "\"${project.properties["PORCUPINE_KEY"] ?: ""}\"")
     }
 
     buildTypes {
@@ -41,6 +40,7 @@ android {
         buildConfig = true
     }
     androidResources {
+        noCompress += "onnx"
         noCompress += "ppn"
     }
 }

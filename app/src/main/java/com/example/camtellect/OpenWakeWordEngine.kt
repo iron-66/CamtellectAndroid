@@ -14,9 +14,9 @@ import kotlin.math.max
 
 class OpenWakeWordEngine(
     private val context: Context,
-    private val wakeModelAsset: String = "oww/weather_v0.1.onnx",
-    private val threshold: Float = 0.55f,
-    private val smoothWindow: Int = 5,
+    private val wakeModelAsset: String = "oww/what_is_this_.onnx",
+    private val threshold: Float = 0.015f,
+    private val smoothWindow: Int = 3,
     private val onWake: () -> Unit
 ) {
 
