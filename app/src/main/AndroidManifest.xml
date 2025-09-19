@@ -43,7 +43,7 @@
         <service
             android:name=".WakeWordService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|camera" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

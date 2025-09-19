@@ -81,6 +81,12 @@ fun CameraPreview(
             }
         }
     }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            CameraPreview.takePicture = null
+        }
+    }
 }
 
 object CameraPreview {

@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tts = TextToSpeech(this, this)
+        WakeWordTrigger.appContext = applicationContext
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -168,6 +169,9 @@ private fun parseReplyPayload(payload: String?): String? {
 @Composable
 fun VoicePromptScreen(tts: TextToSpeech) {
     val context = LocalContext.current
+    val settingsPrefs = remember(context) {
+        context.getSharedPreferences("settings", MODE_PRIVATE)
+    }
 
     var isRecording by remember { mutableStateOf(false) }
     var audioFile by remember { mutableStateOf<String?>(null) }
@@ -175,9 +179,13 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var serverReply by remember { mutableStateOf<String?>(null) }
     var isSettingsOpen by remember { mutableStateOf(false) }
     var isConnectWizardOpen by remember { mutableStateOf(false) }
-    var ipAddress by remember { mutableStateOf("") }
+    var ipAddress by remember {
+        mutableStateOf(settingsPrefs.getString("wireless_ip", "") ?: "")
+    }
     var allowBackground by remember { mutableStateOf(false) }
-    var selectedCamera by remember { mutableStateOf("back") }
+    var selectedCamera by remember {
+        mutableStateOf(settingsPrefs.getString("selected_camera", "back") ?: "back")
+    }
     val cameraOptions = getCameraOptions()
     val photoPath = context.filesDir.absolutePath + "/photo.jpg"
     var shouldSendPrompt by remember { mutableStateOf(false) }
@@ -273,8 +281,7 @@ fun VoicePromptScreen(tts: TextToSpeech) {
             onClose = { isConnectWizardOpen = false },
             onIpChosen = { ip ->
                 ipAddress = ip
-                context.getSharedPreferences("settings", MODE_PRIVATE)
-                    .edit().putString("wireless_ip", ip).apply()
+                settingsPrefs.edit().putString("wireless_ip", ip).apply()
             }
         )
         return
@@ -284,7 +291,10 @@ fun VoicePromptScreen(tts: TextToSpeech) {
         SettingsScreen(
             currentIp = ipAddress,
             allowBackground = allowBackground,
-            onIpChange = { ipAddress = it },
+            onIpChange = {
+                ipAddress = it
+                settingsPrefs.edit().putString("wireless_ip", it).apply()
+            },
             onAllowBackgroundChange = { allowBackground = it },
             onBack = { isSettingsOpen = false },
             onConnectCamera = { isConnectWizardOpen = true }
@@ -297,7 +307,10 @@ fun VoicePromptScreen(tts: TextToSpeech) {
             AppBottomBar(
                 cameraOptions = cameraOptions,
                 selectedCamera = selectedCamera,
-                onCameraSelect = { selectedCamera = it },
+                onCameraSelect = {
+                    selectedCamera = it
+                    settingsPrefs.edit().putString("selected_camera", it).apply()
+                },
                 isRecording = isRecording,
                 onRecordToggle = ::onRecordToggle,
                 onSettingsClick = { isSettingsOpen = true },
