@@ -16,7 +16,7 @@ class OpenWakeWordEngine(
     private val context: Context,
     private val wakeModelAsset: String = "oww/what_is_this_.onnx",
     private val threshold: Float = 0.015f,
-    private val smoothWindow: Int = 3,
+    private val smoothWindow: Int = 1,
     private val onWake: () -> Unit
 ) {
 

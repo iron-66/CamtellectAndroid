@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         oww = OpenWakeWordEngine(
             context = this,
             wakeModelAsset = "oww/what_is_this_.onnx",
-            threshold = 0.015f
+            threshold = 0.002f
         ) {
             WakeWordTrigger.shouldTakeAndSendPhoto = true
             WakeWordTrigger.appContext = applicationContext
@@ -72,8 +72,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         ) { results ->
             val denied = results.filterValues { !it }.keys
             if (denied.isEmpty()) {
-                // микрофон уже точно есть → можно стартовать
-                oww?.start()
+                ContextCompat.startForegroundService(
+                    this, Intent(this, WakeWordService::class.java)
+                )
             } else {
                 Toast.makeText(this, "Permissions denied: ${denied.joinToString()}", Toast.LENGTH_SHORT).show()
             }
