@@ -61,9 +61,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             wakeModelAsset = "oww/what_is_this_.onnx",
             threshold = 0.002f
         ) {
-            WakeWordTrigger.shouldTakeAndSendPhoto = true
             WakeWordTrigger.appContext = applicationContext
-            CameraPreview.takePicture?.invoke()
+            WakeWordTrigger.shouldTakeAndSendPhoto = true
             Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
         }
 
@@ -184,13 +183,28 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var shouldSendPrompt by remember { mutableStateOf(false) }
     var pendingAudioFile by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(audioFile, photoFile, shouldSendPrompt) {
-        if (shouldSendPrompt && !audioFile.isNullOrEmpty() && !photoFile.isNullOrEmpty()) {
-            shouldSendPrompt = false
-            android.util.Log.i("BTN", "📸 Manual snapshot, sending audio=$audioFile, photo=$photoFile")
-            sendPromptToServer(context, audioFile, photoFile) { reply ->
-                serverReply = reply
-                tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+    LaunchedEffect(WakeWordTrigger.shouldTakeAndSendPhoto, selectedCamera, ipAddress) {
+        if (WakeWordTrigger.shouldTakeAndSendPhoto) {
+            if (selectedCamera == "wireless" && ipAddress.isNotEmpty()) {
+                // ——— снимок с беспроводной камеры
+                val destPath = context.filesDir.resolve("wake_${System.currentTimeMillis()}.jpg").absolutePath
+                val photoUrl = "http://$ipAddress:8080/photo.jpg"
+                WakeWordTrigger.shouldTakeAndSendPhoto = false  // сразу сбрасываем, мы отправим сами
+                downloadPhotoFromIpWebcam(
+                    url = photoUrl,
+                    outputPath = destPath
+                ) { ok ->
+                    if (ok) {
+                        sendPhotoOnlyToServer(context, destPath) { reply ->
+                            serverReply = reply
+                            tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                    } else {
+                        android.util.Log.e("WAKE", "Wireless snapshot failed")
+                    }
+                }
+            } else {
+                CameraPreview.takePicture?.invoke()
             }
         }
     }
