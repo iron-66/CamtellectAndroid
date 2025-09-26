@@ -17,6 +17,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "REALTIME_SESSION_URL", "\"https://devicio.org/realtime-session\"")
+        buildConfigField("String", "REALTIME_MODEL", "\"gpt-4o-realtime-preview\"")
+        buildConfigField("String", "REALTIME_VOICE", "\"verse\"")
     }
 
     buildTypes {
@@ -48,6 +51,9 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
@@ -64,10 +70,12 @@ dependencies {
     implementation(libs.androidx.activity.compose.v190)
     implementation(libs.androidx.camera.core)
     implementation(libs.okhttp)
+    implementation(libs.kotlinx.coroutines.android)
     implementation(libs.libvlc.all)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.onnxruntime.android)
+    implementation(libs.webrtc)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
