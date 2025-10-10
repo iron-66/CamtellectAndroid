@@ -28,14 +28,13 @@ import android.widget.Toast
 import android.speech.tts.TextToSpeech
 import androidx.activity.result.ActivityResultLauncher
 import androidx.camera.core.CameraSelector
-import com.example.camtellect.oww.OpenWakeWordEngine
 import java.util.Locale
 import org.json.JSONObject
+import com.example.camtellect.RealtimeCallPanel
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private lateinit var allPermsLauncher: ActivityResultLauncher<Array<String>>
-    private var oww: OpenWakeWordEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,24 +55,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
 
-        oww = OpenWakeWordEngine(
-            context = this,
-            wakeModelAsset = "oww/what_is_this_.onnx",
-            threshold = 0.002f
-        ) {
-            WakeWordTrigger.appContext = applicationContext
-            WakeWordTrigger.shouldTakeAndSendPhoto = true
-            Toast.makeText(this, "Wake word!", Toast.LENGTH_SHORT).show()
-        }
-
         allPermsLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { results ->
             val denied = results.filterValues { !it }.keys
             if (denied.isEmpty()) {
-                ContextCompat.startForegroundService(
-                    this, Intent(this, WakeWordService::class.java)
-                )
+                // здесь можно стартовать то, что тебе нужно (например, свою запись аудио или сразу Realtime)
+                // пример: ContextCompat.startForegroundService(this, Intent(this, AudioRecordService::class.java))
             } else {
                 Toast.makeText(this, "Permissions denied: ${denied.joinToString()}", Toast.LENGTH_SHORT).show()
             }
@@ -96,8 +84,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (missing.isNotEmpty()) {
             allPermsLauncher.launch(missing.toTypedArray())
         } else {
-            // всё уже выдано
-            oww?.start()
+            // все разрешения уже выданы — если нужно, стартуй свои сервисы здесь
         }
     }
 
@@ -106,19 +93,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CAMERA
         )
-        // Добавляй ТОЛЬКО если реально используешь:
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // для BLE-скана/BT-камер
+            // если действительно потребуется BLE
             // list += Manifest.permission.BLUETOOTH_CONNECT
             // list += Manifest.permission.BLUETOOTH_SCAN
         } else {
-            // для BLE-скана на Android 11-
+            // для BLE на Android 11-
             // list += Manifest.permission.ACCESS_FINE_LOCATION
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // нужно только если сканируешь Wi-Fi устройства поблизости
+            // если будешь реально сканировать Wi-Fi
             // list += Manifest.permission.NEARBY_WIFI_DEVICES
-            // если нужны уведомления FG-сервиса:
+            // если будут уведомления от FG-сервиса:
             // list += Manifest.permission.POST_NOTIFICATIONS
         }
         return list.toTypedArray()
@@ -131,7 +117,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        oww?.stop()
         tts.stop(); tts.shutdown()
         super.onDestroy()
     }
@@ -183,32 +168,6 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     var shouldSendPrompt by remember { mutableStateOf(false) }
     var pendingAudioFile by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(WakeWordTrigger.shouldTakeAndSendPhoto, selectedCamera, ipAddress) {
-        if (WakeWordTrigger.shouldTakeAndSendPhoto) {
-            if (selectedCamera == "wireless" && ipAddress.isNotEmpty()) {
-                // ——— снимок с беспроводной камеры
-                val destPath = context.filesDir.resolve("wake_${System.currentTimeMillis()}.jpg").absolutePath
-                val photoUrl = "http://$ipAddress:8080/photo.jpg"
-                WakeWordTrigger.shouldTakeAndSendPhoto = false  // сразу сбрасываем, мы отправим сами
-                downloadPhotoFromIpWebcam(
-                    url = photoUrl,
-                    outputPath = destPath
-                ) { ok ->
-                    if (ok) {
-                        sendPhotoOnlyToServer(context, destPath) { reply ->
-                            serverReply = reply
-                            tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
-                        }
-                    } else {
-                        android.util.Log.e("WAKE", "Wireless snapshot failed")
-                    }
-                }
-            } else {
-                CameraPreview.takePicture?.invoke()
-            }
-        }
-    }
-
     fun onRecordToggle() {
         if (!isRecording) {
             ContextCompat.startForegroundService(context, Intent(context, AudioRecordService::class.java))
@@ -246,16 +205,6 @@ fun VoicePromptScreen(tts: TextToSpeech) {
 
     fun onSnapshotReady(path: String) {
         photoFile = path
-
-        val ctx = WakeWordTrigger.appContext
-        if (WakeWordTrigger.shouldTakeAndSendPhoto && ctx != null) {
-            WakeWordTrigger.shouldTakeAndSendPhoto = false
-            android.util.Log.i("WAKE", "📸 Wake-word snapshot, sending photo=$path")
-            sendPhotoOnlyToServer(ctx, path) { reply ->
-                serverReply = reply
-                tts.speak(reply ?: "", TextToSpeech.QUEUE_FLUSH, null, null)
-            }
-        }
 
         if (!pendingAudioFile.isNullOrEmpty()) {
             val audioToSend = pendingAudioFile
@@ -346,6 +295,10 @@ fun VoicePromptScreen(tts: TextToSpeech) {
                 }
             }
 
+            Divider(modifier = Modifier.padding(vertical = 12.dp))
+            Text("Realtime (beta)", style = MaterialTheme.typography.titleMedium)
+            RealtimeCallPanel(baseUrl = "https://devicio.org")
+
             if (serverReply != null) {
                 Text(
                     text = "Response:\n$serverReply",
@@ -359,10 +312,7 @@ fun VoicePromptScreen(tts: TextToSpeech) {
     }
 }
 
-object WakeWordTrigger {
-    var shouldTakeAndSendPhoto: Boolean by mutableStateOf(false)
-    var appContext: android.content.Context? = null
-}
+// ==== остальной код (HTTP/фото) без изменений ====
 
 fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, onReply: (String?) -> Unit) {
     if (photoPath.isNullOrEmpty()) {
@@ -407,7 +357,6 @@ fun sendPhotoOnlyToServer(context: android.content.Context, photoPath: String?, 
 
 private fun downscaleJpegIfNeeded(inputPath: String, maxDim: Int = 1280, quality: Int = 85): File {
     val src = java.io.File(inputPath)
-    // Быстрая защита: если файл уже небольшой (< 600KB), не трогаем
     if (src.length() < 600_000) return src
 
     val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -424,7 +373,6 @@ private fun downscaleJpegIfNeeded(inputPath: String, maxDim: Int = 1280, quality
     val opts2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = inSample }
     val bmp = android.graphics.BitmapFactory.decodeFile(inputPath, opts2) ?: return src
 
-    // Второй проход (точное масштабирование по maxDim)
     val scale = maxOf(bmp.width.toFloat() / maxDim, bmp.height.toFloat() / maxDim, 1f)
     val outW = (bmp.width / scale).toInt()
     val outH = (bmp.height / scale).toInt()
