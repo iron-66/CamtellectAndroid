@@ -2,20 +2,41 @@ package com.example.camtellect
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import okhttp3.*
+import kotlinx.coroutines.Dispatchers
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import org.webrtc.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.webrtc.AudioSource
+import org.webrtc.Camera2Enumerator
+import org.webrtc.DataChannel
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RendererCommon
+import org.webrtc.RtpReceiver
+import org.webrtc.RtpTransceiver
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoCapturer
+import org.webrtc.VideoSource
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CancellableContinuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class RealtimePeer(
     private val context: Context,
-    private val tokenProvider: suspend () -> String // выдаёт эфемерный токен с твоего бекенда
+    private val tokenProvider: suspend () -> String // вернёт ephemeral token
 ) {
     companion object {
         private const val TAG = "RTRTC"
@@ -29,121 +50,109 @@ class RealtimePeer(
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private var eglBase: EglBase? = null
+    private var localVideoTrack: org.webrtc.VideoTrack? = null
     private var factory: PeerConnectionFactory? = null
     private var pc: PeerConnection? = null
-    private var localVideoSource: VideoSource? = null
-    private var localAudioSource: AudioSource? = null
+    private var audioSource: AudioSource? = null
+    private var videoSource: VideoSource? = null
     private var videoCapturer: VideoCapturer? = null
-    private var eglBase: EglBase? = null
 
-    // будем резолвить это при IceGatheringState.COMPLETE
-    private var iceCompleteCont: CancellableContinuation<Unit>? = null
+    fun getEglBase(): EglBase? = eglBase
 
-    /** Позови, когда у тебя есть SurfaceViewRenderer под локальный превью. */
+    /** Привязать локальный рендерер в любой момент (после Connect покажет превью). */
     fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
-        eglBase?.let { renderer.init(it.eglBaseContext, null) }
+        eglBase?.let { /* renderer.init выполняется в RealtimeVideoView */ }
+        localVideoTrack?.addSink(renderer)
     }
 
-    suspend fun connect(
-        getLocalRenderer: () -> SurfaceViewRenderer?,
-        onState: (String) -> Unit
-    ) {
+    // будем резолвить ожидание, когда IceGatheringState станет COMPLETE
+    @Volatile private var iceGatheringComplete: Boolean = false
+
+    suspend fun connect(onState: (String) -> Unit) {
         onState("init")
 
-        // 1) PeerConnectionFactory + EGL
+        // 1) Инициализация WebRTC (общий EGL контекст, фабрика) — оффер будет сырой, без SDP-munging
         eglBase = EglBase.create()
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions()
         )
         factory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase!!.eglBaseContext))
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, /*enableIntelVp8Encoder*/true, /*enableH264HighProfile*/true))
             .createPeerConnectionFactory()
 
-        // 2) ICE/STUN + UNIFIED_PLAN
+        // 2) PeerConnection с UNIFIED_PLAN
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         )
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+        val cfg = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
-
-        // 3) PeerConnection + коллбэки
-        pc = factory!!.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onSignalingChange(state: PeerConnection.SignalingState) {}
-
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                onState("ice=$state")
+        pc = factory!!.createPeerConnection(cfg, object : PeerConnection.Observer {
+            override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
+                onState("ice=$newState")
             }
-
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {
-                // no-op
-            }
-
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-                if (state == PeerConnection.IceGatheringState.COMPLETE) {
-                    iceCompleteCont?.let { if (it.isActive) it.resume(Unit) }
-                    iceCompleteCont = null
+            override fun onIceConnectionReceivingChange(p0: Boolean) {}
+            override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
+                if (newState == PeerConnection.IceGatheringState.COMPLETE) {
+                    iceGatheringComplete = true
                 }
             }
-
             override fun onIceCandidate(candidate: IceCandidate) {
-                // Trickle не используем (OpenAI ждёт полный SDP), просто лог
+                // Realtime ждёт non-trickle (полный SDP), кандидаты шлём в составе оффера
                 Log.d(TAG, "onIceCandidate: $candidate")
             }
-
-            override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {}
-
+            override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>) {}
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                 onState("pc=$newState")
             }
-
-            override fun onAddStream(stream: MediaStream) {}
-            override fun onRemoveStream(stream: MediaStream) {}
-            override fun onDataChannel(dc: DataChannel) {}
+            override fun onAddStream(p0: MediaStream?) {}
+            override fun onRemoveStream(p0: MediaStream?) {}
+            override fun onDataChannel(p0: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<MediaStream>) {}
-
+            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
             override fun onTrack(transceiver: RtpTransceiver) {
                 Log.i(TAG, "onTrack kind=${transceiver.receiver.track()?.kind()}")
             }
-        }) ?: run {
-            onState("failed: peerconnection null"); return
+        }) ?: throw IllegalStateException("PeerConnection is null")
+
+        // 3) Локальный аудио-трек (Opus по умолчанию)
+        val audioConstraints = MediaConstraints().apply {
+            optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
         }
+        audioSource = factory!!.createAudioSource(audioConstraints)
+        val audioTrack = factory!!.createAudioTrack("audio0", audioSource)
 
-        // 4) Локальное видео (Camera2 → VideoSource → Track)
-        val cameraEnumerator = Camera2Enumerator(context)
-        val camName = cameraEnumerator.deviceNames.firstOrNull { cameraEnumerator.isFrontFacing(it) }
-            ?: cameraEnumerator.deviceNames.firstOrNull()
-        videoCapturer = cameraEnumerator.createCapturer(camName, null)
+        val aTrans = pc!!.addTransceiver(
+            MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+        )
+        aTrans.sender.setTrack(audioTrack, false)
 
-        localVideoSource = factory!!.createVideoSource(false)
+        // 4) Локальный видео-трек (через Camera2Enumerator)
+        val enumerator = Camera2Enumerator(context)
+        val camName = enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) }
+            ?: enumerator.deviceNames.firstOrNull() ?: error("No cameras")
+        videoCapturer = enumerator.createCapturer(camName, null)
+
+        videoSource = factory!!.createVideoSource(false)
         val surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase!!.eglBaseContext)
-        videoCapturer!!.initialize(surfaceHelper, context, localVideoSource!!.capturerObserver)
+        videoCapturer!!.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
         videoCapturer!!.startCapture(1280, 720, 30)
 
-        val localVideoTrack = factory!!.createVideoTrack("video0", localVideoSource)
-        getLocalRenderer()?.let { localVideoTrack.addSink(it) }
+        localVideoTrack = factory!!.createVideoTrack("video0", videoSource)
 
-        // 5) Локальный микрофон (Opus)
-        val audioConstraints = MediaConstraints()
-        localAudioSource = factory!!.createAudioSource(audioConstraints)
-        val localAudioTrack = factory!!.createAudioTrack("audio0", localAudioSource)
-
-        // 6) Unified Plan: добавляем два транспривера (SEND_RECV)
         val vTrans = pc!!.addTransceiver(
             MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
         )
         vTrans.sender.setTrack(localVideoTrack, false)
 
-        val aTrans = pc!!.addTransceiver(
-            MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
-            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
-        )
-        aTrans.sender.setTrack(localAudioTrack, false)
-
-        // 7) Создаём offer
+        // 5) Создаём оффер БЕЗ правок SDP (как рекомендуют гайды по Realtime/WebRTC)
         val offerConstraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
@@ -151,34 +160,45 @@ class RealtimePeer(
         val offer = suspendCancellableCoroutine<SessionDescription> { cont ->
             pc!!.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(desc: SessionDescription) = cont.resume(desc)
-                override fun onCreateFailure(reason: String?) = cont.resumeWithException(RuntimeException("offer fail: $reason"))
+                override fun onCreateFailure(reason: String?) =
+                    cont.resumeWithException(RuntimeException("offer fail: $reason"))
                 override fun onSetSuccess() {}
                 override fun onSetFailure(p0: String?) {}
             }, offerConstraints)
         }
 
-        // 8) Мунжим SDP → оставляем VP8/Opus и выкидываем мусор
-        val mungedOffer = SessionDescription(SessionDescription.Type.OFFER, preferVp8Opus(offer.description))
+        // Логи для валидации Opus
+        val sdp = offer.description
+        Log.i(TAG, sdp.lines().firstOrNull { it.startsWith("m=audio") } ?: "no m=audio")
+        Log.i(TAG, sdp.lines().firstOrNull { it.contains("a=rtpmap:") && it.contains("opus") } ?: "no opus rtpmap")
 
-        // 9) Ставим локальное описание и ждём, пока соберутся ICE-кандидаты
+        // 6) Ставим локальное описание и ждём ICE COMPLETE (не используем trickle)
         suspendCancellableCoroutine<Unit> { cont ->
             pc!!.setLocalDescription(object : SdpObserver {
                 override fun onSetSuccess() = cont.resume(Unit)
-                override fun onSetFailure(reason: String?) = cont.resumeWithException(RuntimeException("setLocal fail: $reason"))
+                override fun onSetFailure(reason: String?) =
+                    cont.resumeWithException(RuntimeException("setLocal fail: $reason"))
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(p0: String?) {}
-            }, mungedOffer)
+            }, offer)
         }
-        suspendCancellableCoroutine<Unit> { cont -> iceCompleteCont = cont }
 
-        // 10) POST в OpenAI Realtime → получаем SDP answer
-        val ephemeral = tokenProvider()
+        // Простое ожидание ICE COMPLETE (с таймаутом ~3с)
+        withContext(Dispatchers.IO) {
+            val start = System.currentTimeMillis()
+            while (!iceGatheringComplete && System.currentTimeMillis() - start < 3000L) {
+                Thread.sleep(30)
+            }
+        }
+
+        // 7) Отправляем исходный оффер в Realtime → получаем answer (всё в IO-пуле)
+        val ephemeral = withContext(Dispatchers.IO) { tokenProvider() }
         val req = Request.Builder()
             .url(REALTIME_URL)
             .addHeader("Authorization", "Bearer $ephemeral")
             .addHeader("OpenAI-Beta", BETA_HDR)
             .addHeader("Content-Type", "application/sdp")
-            .post(RequestBody.create("application/sdp".toMediaTypeOrNull(), mungedOffer.description))
+            .post(offer.description.toRequestBody("application/sdp".toMediaTypeOrNull()))
             .build()
 
         val answerSdp = withContext(Dispatchers.IO) {
@@ -192,12 +212,13 @@ class RealtimePeer(
             }
         }
 
-        // 11) Ставит удалённое описание (answer) → готово
+        // 8) Ставим удалённое описание и всё
         val answer = SessionDescription(SessionDescription.Type.ANSWER, answerSdp)
         suspendCancellableCoroutine<Unit> { cont ->
             pc!!.setRemoteDescription(object : SdpObserver {
                 override fun onSetSuccess() = cont.resume(Unit)
-                override fun onSetFailure(reason: String?) = cont.resumeWithException(RuntimeException("setRemote fail: $reason"))
+                override fun onSetFailure(reason: String?) =
+                    cont.resumeWithException(RuntimeException("setRemote fail: $reason"))
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(p0: String?) {}
             }, answer)
@@ -209,77 +230,18 @@ class RealtimePeer(
     fun disconnect() {
         try { videoCapturer?.stopCapture() } catch (_: Exception) {}
         videoCapturer?.dispose()
-        localVideoSource?.dispose()
-        localAudioSource?.dispose()
+        videoSource?.dispose()
+        audioSource?.dispose()
         pc?.close()
         factory?.dispose()
         eglBase?.release()
 
+        localVideoTrack = null
         videoCapturer = null
-        localVideoSource = null
-        localAudioSource = null
+        videoSource = null
+        audioSource = null
         pc = null
         factory = null
         eglBase = null
     }
-
-    // ================= Utils =================
-
-    private fun preferVp8Opus(sdp: String): String {
-        val lines = sdp.split("\r\n").toMutableList()
-
-        // Собираем карту pt -> codec
-        val rtpmap = mutableMapOf<String, String>() // "111" -> "opus/48000/2", "96" -> "vp8/90000"
-        lines.forEach { l ->
-            if (l.startsWith("a=rtpmap:")) {
-                val rest = l.removePrefix("a=rtpmap:")
-                val sp = rest.indexOf(' ')
-                if (sp > 0) {
-                    val pt = rest.substring(0, sp).trim()
-                    val codec = rest.substring(sp + 1).trim().lowercase()
-                    rtpmap[pt] = codec
-                }
-            }
-        }
-        val opusPt = rtpmap.entries.firstOrNull { it.value.startsWith("opus/") }?.key
-        val vp8Pt  = rtpmap.entries.firstOrNull { it.value.startsWith("vp8/") }?.key
-
-        fun rewriteMLine(kind: String, preferPt: String?) {
-            val idx = lines.indexOfFirst { it.startsWith("m=$kind ") }
-            if (idx == -1 || preferPt == null) return
-            val parts = lines[idx].split(" ").toMutableList()
-            if (parts.size < 4) return
-            val head = parts.take(3)
-            val payloads = parts.drop(3)
-            val newPayloads = listOf(preferPt) + payloads.filter { it == preferPt }
-            // фактически оставляем только preferPt, что гарантирует «только Opus / только VP8»
-            lines[idx] = (head + listOf(preferPt)).joinToString(" ")
-        }
-
-        // Уберём очевидный мусор из аудио
-        val removeAudioPts = rtpmap.entries
-            .filter { it.value.startsWith("cn/") || it.value.startsWith("telephone-event/") }
-            .map { it.key }
-            .toSet()
-
-        // Переставим m=audio/m=video
-        rewriteMLine("audio", opusPt)
-        rewriteMLine("video", vp8Pt)
-
-        // Почистим rtpmap/fmtp/rtcp-fb для выпиленных аудио payload’ов
-        val keepPts = setOfNotNull(opusPt, vp8Pt)
-        val cleaned = lines.filter { l ->
-            if (l.startsWith("a=rtpmap:") || l.startsWith("a=fmtp:") || l.startsWith("a=rtcp-fb:")) {
-                val colon = l.indexOf(':')
-                val space = l.indexOf(' ')
-                val pt = if (colon >= 0 && space > colon) l.substring(colon + 1, space) else ""
-                // выкидываем «CN/telephone-event» и вообще всё, что не входит в выбранные pt
-                !(removeAudioPts.contains(pt) || (pt.isNotEmpty() && pt !in keepPts))
-            } else true
-        }
-
-        return cleaned.joinToString("\r\n")
-    }
-
-    private fun <T> setOfNotNull(vararg x: T?): Set<T> = x.filterNotNull().toSet()
 }

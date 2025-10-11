@@ -41,10 +41,6 @@
             android:name=".AudioRecordService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
-        <service
-            android:name=".WakeWordService"
-            android:exported="false"
-            android:foregroundServiceType="microphone" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
