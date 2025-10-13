@@ -8,7 +8,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -18,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,13 +35,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Права на камеру/микрофон
         permsLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
 
         setContent {
             var connected by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("idle") }
+            val isConnecting by derivedStateOf { status == "init" } // только для лоадера на кнопке
             val scope = rememberCoroutineScope()
 
+            // Инициализация peer с провайдером эфемерального токена
             LaunchedEffect(Unit) {
                 peer = RealtimePeer(
                     context = this@MainActivity,
@@ -63,14 +66,20 @@ class MainActivity : ComponentActivity() {
                 bottomBar = {
                     AppBottomBar(
                         connected = connected,
+                        isConnecting = isConnecting, // <- новый флаг для лоадера в кнопке
                         onConnect = {
+                            // ВАЖНО: сохраняем твоё поведение — сначала скрываем CameraX
+                            // (connected=true), чтобы камера была свободна для WebRTC.
+                            status = "init"
                             connected = true
                             scope.launch(Dispatchers.Default) {
                                 try {
                                     peer.connect { s -> status = s }
                                 } catch (e: Exception) {
-                                    status = "error: ${e.message}"
-                                    connected = false
+                                    withContext(Dispatchers.Main) {
+                                        status = "error: ${e.message}"
+                                        connected = false
+                                    }
                                 }
                             }
                         },
@@ -79,7 +88,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     peer.disconnect()
                                 } finally {
-                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    withContext(Dispatchers.Main) {
                                         connected = false
                                         status = "disconnected"
                                     }
@@ -89,7 +98,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             ) { pad ->
-                Column(Modifier.padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    Modifier.padding(pad).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Text("Status: $status", style = MaterialTheme.typography.titleMedium)
 
                     if (!connected) {
@@ -97,11 +109,11 @@ class MainActivity : ComponentActivity() {
                         Text("Camera Preview", style = MaterialTheme.typography.titleMedium)
                         CameraXPreview(lensFacing = CameraSelector.LENS_FACING_BACK)
                     } else {
-                        // После подключения — локальный WebRTC-превью (тот же поток, что уходит в сеть)
+                        // После подключения — локальный WebRTC-превью
                         val egl = peer.getEglBase()
                         if (egl != null) {
                             RealtimeVideoView(
-                                eglBase = peer.getEglBase()!!,
+                                eglBase = egl,
                                 onReady = { r -> peer.attachLocalRenderer(r) },
                                 onDisposeRenderer = { r -> peer.detachLocalRenderer(r) }
                             )
