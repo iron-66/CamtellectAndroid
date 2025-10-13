@@ -10,13 +10,14 @@ import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
 /**
- * Локальный превью WebRTC (тот же поток, что уходит в сеть).
- * Вызови peer.attachLocalRenderer(renderer) сразу после Connect.
+ * Локальный превью WebRTC (тот же поток, который уходит в Realtime).
+ * В onReady навешиваем track.addSink(renderer) через peer.attachLocalRenderer(renderer).
  */
 @Composable
 fun RealtimeVideoView(
-    eglBase: EglBase,                 // бери из peer.getEglBase()
-    onReady: (SurfaceViewRenderer) -> Unit
+    eglBase: EglBase,
+    onReady: (SurfaceViewRenderer) -> Unit,
+    onDisposeRenderer: (SurfaceViewRenderer) -> Unit = {} // прокинем peer.detachLocalRenderer
 ) {
     var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
@@ -25,19 +26,25 @@ fun RealtimeVideoView(
             SurfaceViewRenderer(ctx).apply {
                 init(eglBase.eglBaseContext, null)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                setMirror(true)
+                setMirror(false)
                 setEnableHardwareScaler(true)
                 setZOrderMediaOverlay(false)
                 renderer = this
                 onReady(this)
             }
         },
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f),
+        modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f),
         onRelease = {
+            renderer?.let { onDisposeRenderer(it) }
             it.release()
-            if (renderer === it) renderer = null
+            renderer = null
         }
     )
+
+    DisposableEffect(Unit) {
+        onDispose {
+            renderer?.let { onDisposeRenderer(it) }
+        }
+    }
 }
+
