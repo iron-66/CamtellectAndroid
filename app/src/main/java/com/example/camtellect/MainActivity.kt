@@ -35,13 +35,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Права на камеру/микрофон
         permsLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
 
         setContent {
             var connected by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("idle") }
-            val isConnecting by derivedStateOf { status == "init" } // только для лоадера на кнопке
+            val isConnecting = status == "init"
             val scope = rememberCoroutineScope()
 
             // Инициализация peer с провайдером эфемерального токена
@@ -66,17 +65,15 @@ class MainActivity : ComponentActivity() {
                 bottomBar = {
                     AppBottomBar(
                         connected = connected,
-                        isConnecting = isConnecting, // <- новый флаг для лоадера в кнопке
+                        isConnecting = (status == "init"),
                         onConnect = {
-                            // ВАЖНО: сохраняем твоё поведение — сначала скрываем CameraX
-                            // (connected=true), чтобы камера была свободна для WebRTC.
                             status = "init"
                             connected = true
-                            scope.launch(Dispatchers.Default) {
+                            scope.launch(kotlinx.coroutines.Dispatchers.Default) {
                                 try {
                                     peer.connect { s -> status = s }
                                 } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         status = "error: ${e.message}"
                                         connected = false
                                     }
@@ -84,17 +81,16 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDisconnect = {
-                            scope.launch(Dispatchers.Default) {
-                                try {
-                                    peer.disconnect()
-                                } finally {
-                                    withContext(Dispatchers.Main) {
-                                        connected = false
-                                        status = "disconnected"
+                            scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                                try { peer.disconnect() } finally {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        connected = false; status = "disconnected"
                                     }
                                 }
                             }
-                        }
+                        },
+                        onCameraClick = { /* TODO: смена камеры позже */ },
+                        onSettingsClick = { /* TODO: открыть настройки позже */ }
                     )
                 }
             ) { pad ->
