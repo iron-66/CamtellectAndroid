@@ -14,6 +14,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,12 +39,23 @@ class MainActivity : ComponentActivity() {
         permsLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
 
         setContent {
+            val ctx = LocalContext.current
+            // ---- UI state ----
             var connected by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("idle") }
-            val isConnecting = status == "init"
+            val isConnecting = (status == "init")
+            var showWizard by remember { mutableStateOf(false) }
+
+            // persist wireless IP between sessions
+            val prefs = remember { ctx.getSharedPreferences("settings", MODE_PRIVATE) }
+            var wirelessIp by remember {
+                mutableStateOf(prefs.getString("wireless_ip", "") ?: "")
+            }
+            val wirelessEnabled = wirelessIp.isNotEmpty()
+
             val scope = rememberCoroutineScope()
 
-            // Инициализация peer с провайдером эфемерального токена
+            // peer init
             LaunchedEffect(Unit) {
                 peer = RealtimePeer(
                     context = this@MainActivity,
@@ -65,7 +77,8 @@ class MainActivity : ComponentActivity() {
                 bottomBar = {
                     AppBottomBar(
                         connected = connected,
-                        isConnecting = (status == "init"),
+                        isConnecting = isConnecting,
+                        wirelessEnabled = wirelessEnabled,
                         onConnect = {
                             status = "init"
                             connected = true
@@ -73,7 +86,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     peer.connect { s -> status = s }
                                 } catch (e: Exception) {
-                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    withContext(Dispatchers.Main) {
                                         status = "error: ${e.message}"
                                         connected = false
                                     }
@@ -83,7 +96,7 @@ class MainActivity : ComponentActivity() {
                         onDisconnect = {
                             scope.launch(Dispatchers.Default) {
                                 try { peer.disconnect() } finally {
-                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    withContext(Dispatchers.Main) {
                                         connected = false
                                         status = "disconnected"
                                     }
@@ -91,46 +104,48 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onSelectCamera = { which ->
-                            // переключаем только, когда уже подключены (иначе CameraX владеет камерой)
-                            if (!connected) return@AppBottomBar
-                            scope.launch(Dispatchers.Default) {
-                                try {
-                                    when (which) {
-                                        "back"  -> peer.switchCameraFacing(back = true)
-                                        "front" -> peer.switchCameraFacing(back = false)
-                                        // "wireless" is disabled for now
-                                    }
-                                } catch (t: Throwable) {
-                                    android.util.Log.e("RTRTC", "switch camera error: ${t.message}", t)
+                            when (which) {
+                                "back"  -> if (connected) scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = true) }
+                                "front" -> if (connected) scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = false) }
+                                "wireless" -> {
+                                    android.util.Log.i("APP", "Wireless selected: ip=$wirelessIp")
                                 }
                             }
                         },
-                        onSettingsClick = { /* TODO */ }
+                        onSettingsClick = { showWizard = true }
                     )
                 }
-
             ) { pad ->
-                Column(
-                    Modifier.padding(pad).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("Status: $status", style = MaterialTheme.typography.titleMedium)
+                if (showWizard) {
+                    ConnectCameraWizard(
+                        onClose = { showWizard = false },
+                        onIpChosen = { ip ->
+                            wirelessIp = ip
+                            prefs.edit().putString("wireless_ip", ip).apply()
+                            showWizard = false
+                        }
+                    )
+                } else {
+                    Column(
+                        Modifier.padding(pad).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("Status: $status", style = MaterialTheme.typography.titleMedium)
 
-                    if (!connected) {
-                        // До подключения — обычный CameraX-просмотр
-                        Text("Camera Preview", style = MaterialTheme.typography.titleMedium)
-                        CameraXPreview(lensFacing = CameraSelector.LENS_FACING_BACK)
-                    } else {
-                        // После подключения — локальный WebRTC-превью
-                        val egl = peer.getEglBase()
-                        if (egl != null) {
-                            RealtimeVideoView(
-                                eglBase = egl,
-                                onReady = { r -> peer.attachLocalRenderer(r) },
-                                onDisposeRenderer = { r -> peer.detachLocalRenderer(r) }
-                            )
+                        if (!connected) {
+                            Text("Camera Preview", style = MaterialTheme.typography.titleMedium)
+                            CameraXPreview(lensFacing = CameraSelector.LENS_FACING_BACK)
                         } else {
-                            Text("Preparing video preview…")
+                            val egl = peer.getEglBase()
+                            if (egl != null) {
+                                RealtimeVideoView(
+                                    eglBase = egl,
+                                    onReady = { r -> peer.attachLocalRenderer(r) },
+                                    onDisposeRenderer = { r -> peer.detachLocalRenderer(r) }
+                                )
+                            } else {
+                                Text("Preparing video preview…")
+                            }
                         }
                     }
                 }

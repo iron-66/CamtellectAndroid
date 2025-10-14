@@ -14,16 +14,17 @@ import androidx.compose.ui.unit.dp
 fun AppBottomBar(
     connected: Boolean,
     isConnecting: Boolean,
+    wirelessEnabled: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onSelectCamera: (String) -> Unit,
+    onSelectCamera: (String) -> Unit,  // "back" | "front" | "wireless"
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var cameraMenuExpanded by remember { mutableStateOf(false) }
 
     BottomAppBar(modifier = modifier) {
-        // LEFT: camera icon with dropdown
+        // LEFT: camera icon + dropdown
         Box {
             IconButton(onClick = { cameraMenuExpanded = true }) {
                 Icon(Icons.Filled.PhotoCamera, contentDescription = "Camera")
@@ -47,9 +48,12 @@ fun AppBottomBar(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Wireless (coming soon)") },
-                    onClick = { /* no-op */ },
-                    enabled = false // disabled item
+                    text = { Text("Wireless camera") },
+                    onClick = {
+                        cameraMenuExpanded = false
+                        onSelectCamera("wireless")
+                    },
+                    enabled = wirelessEnabled
                 )
             }
         }
