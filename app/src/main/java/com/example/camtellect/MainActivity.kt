@@ -69,11 +69,11 @@ class MainActivity : ComponentActivity() {
                         onConnect = {
                             status = "init"
                             connected = true
-                            scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                            scope.launch(Dispatchers.Default) {
                                 try {
                                     peer.connect { s -> status = s }
                                 } catch (e: Exception) {
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
                                         status = "error: ${e.message}"
                                         connected = false
                                     }
@@ -81,18 +81,34 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDisconnect = {
-                            scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                            scope.launch(Dispatchers.Default) {
                                 try { peer.disconnect() } finally {
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        connected = false; status = "disconnected"
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                        connected = false
+                                        status = "disconnected"
                                     }
                                 }
                             }
                         },
-                        onCameraClick = { /* TODO: смена камеры позже */ },
-                        onSettingsClick = { /* TODO: открыть настройки позже */ }
+                        onSelectCamera = { which ->
+                            // переключаем только, когда уже подключены (иначе CameraX владеет камерой)
+                            if (!connected) return@AppBottomBar
+                            scope.launch(Dispatchers.Default) {
+                                try {
+                                    when (which) {
+                                        "back"  -> peer.switchCameraFacing(back = true)
+                                        "front" -> peer.switchCameraFacing(back = false)
+                                        // "wireless" is disabled for now
+                                    }
+                                } catch (t: Throwable) {
+                                    android.util.Log.e("RTRTC", "switch camera error: ${t.message}", t)
+                                }
+                            }
+                        },
+                        onSettingsClick = { /* TODO */ }
                     )
                 }
+
             ) { pad ->
                 Column(
                     Modifier.padding(pad).padding(16.dp),

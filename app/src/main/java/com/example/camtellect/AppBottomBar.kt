@@ -5,7 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -16,24 +16,52 @@ fun AppBottomBar(
     isConnecting: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onCameraClick: () -> Unit,
+    onSelectCamera: (String) -> Unit,
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var cameraMenuExpanded by remember { mutableStateOf(false) }
+
     BottomAppBar(modifier = modifier) {
-        IconButton(onClick = onCameraClick) {
-            Icon(imageVector = Icons.Filled.PhotoCamera, contentDescription = "Camera")
+        // LEFT: camera icon with dropdown
+        Box {
+            IconButton(onClick = { cameraMenuExpanded = true }) {
+                Icon(Icons.Filled.PhotoCamera, contentDescription = "Camera")
+            }
+            DropdownMenu(
+                expanded = cameraMenuExpanded,
+                onDismissRequest = { cameraMenuExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Back camera") },
+                    onClick = {
+                        cameraMenuExpanded = false
+                        onSelectCamera("back")
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Front camera") },
+                    onClick = {
+                        cameraMenuExpanded = false
+                        onSelectCamera("front")
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Wireless (coming soon)") },
+                    onClick = { /* no-op */ },
+                    enabled = false // disabled item
+                )
+            }
         }
 
+        // CENTER: Connect/Disconnect (with loader)
         Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             contentAlignment = Alignment.Center
         ) {
             when {
                 isConnecting -> {
-                    Button(onClick = { /* disabled while connecting */ }, enabled = false) {
+                    Button(onClick = {}, enabled = false) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -51,8 +79,9 @@ fun AppBottomBar(
             }
         }
 
+        // RIGHT: settings icon
         IconButton(onClick = onSettingsClick) {
-            Icon(imageVector = Icons.Filled.Settings, contentDescription = "Settings")
+            Icon(Icons.Filled.Settings, contentDescription = "Settings")
         }
     }
 }

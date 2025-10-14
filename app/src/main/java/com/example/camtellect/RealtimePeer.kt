@@ -10,24 +10,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.webrtc.AudioSource
-import org.webrtc.Camera2Enumerator
-import org.webrtc.DataChannel
-import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
-import org.webrtc.EglBase
-import org.webrtc.IceCandidate
-import org.webrtc.MediaConstraints
-import org.webrtc.MediaStream
-import org.webrtc.PeerConnection
-import org.webrtc.PeerConnectionFactory
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
-import org.webrtc.SurfaceTextureHelper
-import org.webrtc.SurfaceViewRenderer
-import org.webrtc.VideoCapturer
-import org.webrtc.VideoSink
-import org.webrtc.VideoSource
+import org.webrtc.*
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -55,16 +38,19 @@ class RealtimePeer(
 
     private var audioSource: AudioSource? = null
     private var videoSource: VideoSource? = null
-    private var videoCapturer: VideoCapturer? = null
 
-    private var localAudioTrack: org.webrtc.AudioTrack? = null
-    private var localVideoTrack: org.webrtc.VideoTrack? = null
+    // Единственный актуальный «живой» капчер: держим CameraVideoCapturer,
+    // чтобы можно было switchCamera(...) без пересоздания пайплайна.
+    private var camera2Enumerator: Camera2Enumerator? = null
+    private var surfaceHelper: SurfaceTextureHelper? = null
+    private var cameraCapturer: CameraVideoCapturer? = null
 
-    // DataChannel + keep-alive, чтобы сессия не «засыпала»
+    private var localAudioTrack: AudioTrack? = null
+    private var localVideoTrack: VideoTrack? = null
+
     private var dc: DataChannel? = null
     private var keepAliveJob: kotlinx.coroutines.Job? = null
 
-    // Реестр всех подключенных превью (ленивая привязка к треку)
     private val videoSinks = CopyOnWriteArraySet<VideoSink>()
 
     fun getEglBase(): EglBase? = eglBase
@@ -72,7 +58,7 @@ class RealtimePeer(
     /** Можно вызывать до/после connect — привяжем, как только появится трек. */
     fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
         videoSinks.add(renderer)
-        localVideoTrack?.addSink(renderer) // если трек уже есть — кадры пойдут сразу
+        localVideoTrack?.addSink(renderer)
     }
 
     /** Снять превью-рендерер (например, при dispose в Compose). */
@@ -135,7 +121,7 @@ class RealtimePeer(
             override fun onAddStream(p0: MediaStream?) {}
             override fun onRemoveStream(p0: MediaStream?) {}
             override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(p0: org.webrtc.RtpReceiver?, p1: Array<out MediaStream>?) {}
+            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
 
             // Если сервер сам откроет DC
             override fun onDataChannel(channel: DataChannel) {
@@ -152,7 +138,7 @@ class RealtimePeer(
                 })
             }
 
-            override fun onTrack(transceiver: org.webrtc.RtpTransceiver) {
+            override fun onTrack(transceiver: RtpTransceiver) {
                 Log.i(TAG, "onTrack kind=${transceiver.receiver.track()?.kind()}")
             }
         }) ?: error("PeerConnection is null")
@@ -181,7 +167,7 @@ class RealtimePeer(
                         startKeepAlive()
                     }
                 }
-                override fun onMessage(buffer: DataChannel.Buffer) { /* опционально логи */ }
+                override fun onMessage(buffer: DataChannel.Buffer) { /* optional logs */ }
             })
         }
 
@@ -193,18 +179,23 @@ class RealtimePeer(
         }
         audioSource = factory!!.createAudioSource(audioConstraints)
         localAudioTrack = factory!!.createAudioTrack("audio0", audioSource).apply { setEnabled(true) }
-        pc!!.addTrack(localAudioTrack, listOf("stream0")) // стабильный msid
+        pc!!.addTrack(localAudioTrack, listOf("stream0"))
 
-        // 4) Local video
-        val enumerator = Camera2Enumerator(context)
-        val camName = enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) }
-            ?: enumerator.deviceNames.firstOrNull() ?: error("No cameras")
-        videoCapturer = enumerator.createCapturer(camName, null)
+        // 4) Local video — ИНИЦИАЛИЗИРУЕМ ПОЛЯ (для дальнейшего switchCamera)
+        camera2Enumerator = Camera2Enumerator(context)
+        val startCamName = camera2Enumerator!!.deviceNames.firstOrNull { camera2Enumerator!!.isBackFacing(it) }
+            ?: camera2Enumerator!!.deviceNames.firstOrNull()
+            ?: error("No cameras")
 
+        // Создаём VideoSource и SurfaceTextureHelper один раз
         videoSource = factory!!.createVideoSource(false)
-        val surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase!!.eglBaseContext)
-        videoCapturer!!.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
-        videoCapturer!!.startCapture(1280, 720, 30)
+        surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase!!.eglBaseContext)
+
+        // Создаём CameraVideoCapturer на выбранную камеру и запускаем
+        cameraCapturer = (camera2Enumerator!!.createCapturer(startCamName, null) as CameraVideoCapturer).also { cap ->
+            cap.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
+            cap.startCapture(1280, 720, 30)
+        }
 
         localVideoTrack = factory!!.createVideoTrack("video0", videoSource).apply { setEnabled(true) }
         pc!!.addTrack(localVideoTrack, listOf("stream0"))
@@ -287,6 +278,34 @@ class RealtimePeer(
         onState("connected")
     }
 
+    /** Переключение камеры: пытаемся именованным API, иначе мягко пересоздаём капчер. */
+    suspend fun switchCameraFacing(back: Boolean) {
+        val enumerator = camera2Enumerator ?: return
+        val targetName = enumerator.deviceNames.firstOrNull {
+            if (back) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
+        } ?: return
+
+        val current = cameraCapturer
+        if (current != null) {
+            // Попробуем именованный switchCamera(handler, cameraName) — есть во многих сборках
+            try {
+                current.switchCamera(null /* handler */, targetName)
+                return
+            } catch (_: Throwable) {
+                // В некоторых артефактах есть только switchCamera(handler) — fallback ниже
+            }
+        }
+
+        // Fallback: мягко пересоздаём CameraVideoCapturer с нужным именем
+        try { cameraCapturer?.stopCapture() } catch (_: Exception) {}
+        try { cameraCapturer?.dispose() } catch (_: Exception) {}
+
+        cameraCapturer = (enumerator.createCapturer(targetName, null) as CameraVideoCapturer).also { cap ->
+            cap.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
+            cap.startCapture(1280, 720, 30)
+        }
+    }
+
     fun disconnect() {
         // Если вызвали с UI — перекинем в фон, чтобы не ловить ANR.
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
@@ -310,14 +329,15 @@ class RealtimePeer(
         try { localVideoTrack?.setEnabled(false) } catch (_: Exception) {}
         try { localAudioTrack?.setEnabled(false) } catch (_: Exception) {}
 
-        // 3) Закрыть PeerConnection (в фоне)
+        // 3) Закрыть PeerConnection
         try { pc?.close() } catch (_: Exception) {}
 
-        // 4) Остановить захват камеры (блокирующий вызов — поэтому не на UI)
-        try { videoCapturer?.stopCapture() } catch (_: Exception) {}
+        // 4) Остановить захват камеры
+        try { cameraCapturer?.stopCapture() } catch (_: Exception) {}
+        try { cameraCapturer?.dispose() } catch (_: Exception) {}
+        cameraCapturer = null
 
         // 5) Освободить низкоуровневые ресурсы
-        try { videoCapturer?.dispose() } catch (_: Exception) {}
         try { videoSource?.dispose() } catch (_: Exception) {}
         try { audioSource?.dispose() } catch (_: Exception) {}
 
@@ -326,14 +346,14 @@ class RealtimePeer(
         pc = null
         try { factory?.dispose() } catch (_: Exception) {}
         factory = null
+        try { surfaceHelper?.dispose() } catch (_: Exception) {}
+        surfaceHelper = null
         try { eglBase?.release() } catch (_: Exception) {}
         eglBase = null
 
         // 7) Обнулить ссылки
         localAudioTrack = null
         localVideoTrack = null
-        videoCapturer = null
-        videoSource = null
-        audioSource = null
+        camera2Enumerator = null
     }
 }
