@@ -4,19 +4,49 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.rememberAsyncImagePainter
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.Inet4Address
@@ -37,51 +67,159 @@ fun ConnectCameraWizard(
     var selected by remember { mutableStateOf<CameraCandidate?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    Surface(tonalElevation = 2.dp) {
+    val stepOrder = remember {
+        listOf(
+            WizardStep.Intro,
+            WizardStep.OpenWifiSettings,
+            WizardStep.Scanning,
+            WizardStep.PickResult,
+            WizardStep.Preview
+        )
+    }
+    val stepIndex = stepOrder.indexOf(step).takeIf { it >= 0 }?.plus(1)
+    val headerTitle = when (step) {
+        WizardStep.Intro -> "Connect a wireless camera"
+        WizardStep.OpenWifiSettings -> "Connect both devices"
+        WizardStep.Scanning -> "Scanning the network"
+        WizardStep.PickResult -> "Select your camera"
+        WizardStep.Preview -> "Confirm the live feed"
+        WizardStep.Done -> "All set!"
+    }
+    val headerSubtitle = when (step) {
+        WizardStep.Intro -> "We'll guide you through pairing a camera on your Wi‑Fi."
+        WizardStep.OpenWifiSettings -> "Make sure your phone and camera share the same network."
+        WizardStep.Scanning -> "Searching for compatible streams nearby."
+        WizardStep.PickResult -> "Tap a device to preview a live snapshot."
+        WizardStep.Preview -> selected?.ip?.let { "Streaming from $it" } ?: "Preview the selected camera."
+        WizardStep.Done -> "Your camera details are saved for quick access."
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        tonalElevation = 6.dp
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .padding(horizontal = 24.dp, vertical = 28.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            when (step) {
-
-                WizardStep.Intro -> {
-                    Text("Connect camera", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "This wizard will connect to a wireless camera on your network. " +
-                                "We’ll look for available camera in your current Wi-Fi.",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = headerTitle,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = onClose) { Text("Cancel") }
-                        Button(onClick = { step = WizardStep.OpenWifiSettings }) { Text("Start") }
+                    Text(
+                        text = stepIndex?.let { "Step $it of ${stepOrder.size}" } ?: "Finished",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = headerSubtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Close wizard")
+                }
+            }
+
+            HorizontalDivider()
+
+            when (step) {
+                WizardStep.Intro -> {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Keep the camera powered on and connected to your Wi‑Fi. We'll attempt to discover it automatically.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TextButton(onClick = onClose) { Text("Skip for now") }
+                        FilledTonalButton(
+                            onClick = { step = WizardStep.OpenWifiSettings },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Start scanning") }
                     }
                 }
 
                 WizardStep.OpenWifiSettings -> {
                     val context = LocalContext.current
-                    Text("Connect to Wi-Fi", style = MaterialTheme.typography.headlineMedium)
-                    Text(
-                        "Make sure both devices are in the same Wi-Fi. ",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = { openWifiSettings(context) }) {
-                            Text("Open Wi-Fi settings")
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Connect your device to the same network that the camera broadcasts from.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        OutlinedButton(onClick = { step = WizardStep.Scanning }) { Text("I’m connected") }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { openWifiSettings(context) },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Open Wi‑Fi settings") }
+                        TextButton(onClick = { step = WizardStep.Scanning }) { Text("I'm connected") }
                     }
                 }
 
                 WizardStep.Scanning -> {
-                    Text("Looking for a camera…", style = MaterialTheme.typography.headlineMedium)
-                    if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Text("This can take ~5–10 seconds.")
-                    OutlinedButton(onClick = { step = WizardStep.PickResult }) { Text("Skip") }
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            if (error != null) {
+                                Text(
+                                    text = error!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            Text(
+                                text = "This can take up to ten seconds while we probe the subnet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    TextButton(onClick = { step = WizardStep.PickResult }) { Text("Skip for now") }
 
                     LaunchedEffect(step) {
                         if (step != WizardStep.Scanning) return@LaunchedEffect
@@ -99,71 +237,143 @@ fun ConnectCameraWizard(
                 }
 
                 WizardStep.PickResult -> {
-                    Text("Select your camera", style = MaterialTheme.typography.headlineMedium)
                     if (candidates.isEmpty()) {
-                        Text("Nothing found automatically. You can still enter IP manually on Settings.")
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        candidates.forEach { c ->
-                            ElevatedCard(
-                                onClick = { selected = c; step = WizardStep.Preview },
-                                modifier = Modifier.fillMaxWidth()
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(28.dp),
+                            tonalElevation = 2.dp
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text("IP: ${c.ip}", style = MaterialTheme.typography.titleMedium)
-                                    // мини-превью (статичный кадр)
-                                    val thumbUrl = "http://${c.ip}:8080/shot.jpg"
-                                    Image(
-                                        painter = rememberAsyncImagePainter(thumbUrl),
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(160.dp),
-                                        contentScale = ContentScale.Crop
-                                    )
+                                Text(
+                                    text = "No cameras were discovered automatically. You can still add the IP later from Settings.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            candidates.forEach { c ->
+                                ElevatedCard(
+                                    onClick = {
+                                        selected = c
+                                        step = WizardStep.Preview
+                                    },
+                                    shape = RoundedCornerShape(28.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Text(
+                                            text = "IP: ${c.ip}",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        val thumbUrl = "http://${c.ip}:8080/shot.jpg"
+                                        Image(
+                                            painter = rememberAsyncImagePainter(thumbUrl),
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(160.dp)
+                                                .clip(RoundedCornerShape(20.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { step = WizardStep.Scanning }) { Text("Rescan") }
-                        OutlinedButton(onClick = onClose) { Text("Close") }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TextButton(onClick = { step = WizardStep.Scanning }) { Text("Rescan") }
+                        TextButton(onClick = onClose) { Text("Close") }
                     }
                 }
 
                 WizardStep.Preview -> {
                     val ip = selected?.ip ?: ""
-                    Text("Is this your camera?", style = MaterialTheme.typography.headlineMedium)
-                    Text(ip, style = MaterialTheme.typography.titleMedium)
-                    val html = """
-                        <html><body style="margin:0;padding:0;background:black;overflow:hidden;">
-                        <img src="http://$ip:8080/video" style="width:100vw;height:auto;display:block;"/>
-                        </body></html>
-                    """.trimIndent()
-                    WirelessCameraView(
-                        html = html,
-                        baseUrl = "http://$ip:8080",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { step = WizardStep.PickResult }) { Text("Back") }
-                        Button(onClick = {
-                            if (ip.isNotEmpty()) {
-                                onIpChosen(ip)
-                                step = WizardStep.Done
-                            }
-                        }) { Text("This is my camera!") }
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Text(
+                                text = ip,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            val html = """
+                                <html><body style=\"margin:0;padding:0;background:black;overflow:hidden;\">
+                                <img src=\"http://$ip:8080/video\" style=\"width:100vw;height:auto;display:block;\"/>
+                                </body></html>
+                            """.trimIndent()
+                            WirelessCameraView(
+                                html = html,
+                                baseUrl = "http://$ip:8080",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(16f / 9f)
+                                    .clip(RoundedCornerShape(20.dp))
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TextButton(onClick = { step = WizardStep.PickResult }) { Text("Back") }
+                        FilledTonalButton(
+                            onClick = {
+                                if (ip.isNotEmpty()) {
+                                    onIpChosen(ip)
+                                    step = WizardStep.Done
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Use this camera") }
                     }
                 }
 
                 WizardStep.Done -> {
-                    Text("All set 🎉", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
-                    Text("We saved your camera IP. You can switch to Wireless in the main screen.", textAlign = TextAlign.Start)
-                    Button(onClick = onClose, modifier = Modifier.align(Alignment.End)) {
-                        Text("Close")
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "All set 🎉",
+                                style = MaterialTheme.typography.headlineSmall,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = "We saved your camera IP. You can switch to Wireless in the main screen.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
+                    FilledTonalButton(
+                        onClick = onClose,
+                        modifier = Modifier.align(Alignment.End)
+                    ) { Text("Close") }
                 }
             }
         }

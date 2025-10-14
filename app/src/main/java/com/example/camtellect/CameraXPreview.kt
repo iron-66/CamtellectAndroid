@@ -16,7 +16,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 
 @Composable
-fun CameraXPreview(lensFacing: Int) {
+fun CameraXPreview(
+    lensFacing: Int,
+    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -25,9 +28,7 @@ fun CameraXPreview(lensFacing: Int) {
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(appContext) }
 
     AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f),
+        modifier = modifier,
         factory = { ctx ->
             PreviewView(ctx).apply {
                 // Более стабильный режим для Compose-иерархий
