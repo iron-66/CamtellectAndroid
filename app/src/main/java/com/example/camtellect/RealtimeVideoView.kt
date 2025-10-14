@@ -17,7 +17,8 @@ import org.webrtc.SurfaceViewRenderer
 fun RealtimeVideoView(
     eglBase: EglBase,
     onReady: (SurfaceViewRenderer) -> Unit,
-    onDisposeRenderer: (SurfaceViewRenderer) -> Unit = {} // прокинем peer.detachLocalRenderer
+    onDisposeRenderer: (SurfaceViewRenderer) -> Unit = {}, // прокинем peer.detachLocalRenderer
+    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
 ) {
     var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
@@ -33,7 +34,7 @@ fun RealtimeVideoView(
                 onReady(this)
             }
         },
-        modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f),
+        modifier = modifier,
         onRelease = {
             renderer?.let { onDisposeRenderer(it) }
             it.release()
