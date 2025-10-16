@@ -1,14 +1,31 @@
 package com.example.camtellect.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.surfaceColorAtElevation
 
 @Composable
 fun AppBottomBar(
@@ -23,11 +40,21 @@ fun AppBottomBar(
 ) {
     var cameraMenuExpanded by remember { mutableStateOf(false) }
 
-    BottomAppBar(modifier = modifier) {
-        // LEFT: camera icon + dropdown
+    BottomAppBar(
+        modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
+        tonalElevation = 6.dp,
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+    ) {
         Box {
-            IconButton(onClick = { cameraMenuExpanded = true }) {
-                Icon(Icons.Filled.PhotoCamera, contentDescription = "Camera")
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                IconButton(onClick = { cameraMenuExpanded = true }) {
+                    Icon(Icons.Outlined.PhotoCamera, contentDescription = "Select camera")
+                }
             }
             DropdownMenu(
                 expanded = cameraMenuExpanded,
@@ -58,14 +85,21 @@ fun AppBottomBar(
             }
         }
 
-        // CENTER: Connect/Disconnect (with loader)
+        Spacer(Modifier.width(16.dp))
+
         Box(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
             contentAlignment = Alignment.Center
         ) {
             when {
                 isConnecting -> {
-                    Button(onClick = {}, enabled = false) {
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        shape = RoundedCornerShape(32.dp)
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -78,14 +112,29 @@ fun AppBottomBar(
                         }
                     }
                 }
-                !connected -> Button(onClick = onConnect) { Text("Connect") }
-                else -> Button(onClick = onDisconnect) { Text("Disconnect") }
+
+                !connected -> FilledTonalButton(
+                    onClick = onConnect,
+                    shape = RoundedCornerShape(32.dp)
+                ) { Text("Connect") }
+
+                else -> FilledTonalButton(
+                    onClick = onDisconnect,
+                    shape = RoundedCornerShape(32.dp)
+                ) { Text("Disconnect") }
             }
         }
 
-        // RIGHT: settings icon
-        IconButton(onClick = onSettingsClick) {
-            Icon(Icons.Filled.Settings, contentDescription = "Settings")
+        Spacer(Modifier.width(16.dp))
+
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            IconButton(onClick = onSettingsClick) {
+                Icon(Icons.Outlined.Settings, contentDescription = "Settings")
+            }
         }
     }
 }
