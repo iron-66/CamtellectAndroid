@@ -58,6 +58,9 @@ class RealtimePeer(
 
     private val videoSinks = CopyOnWriteArraySet<VideoSink>()
 
+    @Volatile private var streaming: Boolean = false
+    @Volatile private var uiConnected: Boolean = false
+
     fun getEglBase(): EglBase? = eglBase
 
     /** Можно вызывать до/после connect — привяжем, как только появится трек. */
@@ -70,6 +73,21 @@ class RealtimePeer(
     fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
         try { localVideoTrack?.removeSink(renderer) } catch (_: Exception) {}
         videoSinks.remove(renderer)
+    }
+
+    fun ensureVideoCaptureRunning() {
+        if (!streaming && !uiConnected) return
+        val capturer = cameraCapturer ?: return
+        try {
+            capturer.startCapture(1280, 720, 30)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Capture already running: ${e.message}")
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Failed to restart capture", e)
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Capture restart interrupted", e)
+            Thread.currentThread().interrupt()
+        }
     }
 
     // === DC утилиты ===
@@ -94,6 +112,7 @@ class RealtimePeer(
 
     suspend fun connect(onState: (String) -> Unit) {
         onState("init")
+        streaming = false
 
         // 1) WebRTC init
         eglBase = EglBase.create()
@@ -293,6 +312,7 @@ class RealtimePeer(
             }, answer)
         }
 
+        streaming = true
         onState("connected")
     }
 
@@ -325,6 +345,8 @@ class RealtimePeer(
     }
 
     fun disconnect() {
+        streaming = false
+        uiConnected = false
         // Если вызвали с UI — перекинем в фон, чтобы не ловить ANR.
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             kotlinx.coroutines.GlobalScope.launch(Dispatchers.Default) { disconnect() }
@@ -384,5 +406,11 @@ class RealtimePeer(
         localAudioTrack = null
         localVideoTrack = null
         camera2Enumerator = null
+    }
+
+    fun isStreaming(): Boolean = streaming
+
+    fun setUiConnected(connected: Boolean) {
+        uiConnected = connected
     }
 }
