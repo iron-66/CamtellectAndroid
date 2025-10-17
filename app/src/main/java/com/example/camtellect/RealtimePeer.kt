@@ -45,6 +45,7 @@ class RealtimePeer(
     private var camera2Enumerator: Camera2Enumerator? = null
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var cameraCapturer: CameraVideoCapturer? = null
+    @Volatile private var preferredCameraFacingBack: Boolean = true
 
     private var localAudioTrack: AudioTrack? = null
     private var localVideoTrack: VideoTrack? = null
@@ -58,6 +59,9 @@ class RealtimePeer(
 
     private val videoSinks = CopyOnWriteArraySet<VideoSink>()
 
+    @Volatile private var streaming: Boolean = false
+    @Volatile private var uiConnected: Boolean = false
+
     fun getEglBase(): EglBase? = eglBase
 
     /** Можно вызывать до/после connect — привяжем, как только появится трек. */
@@ -70,6 +74,21 @@ class RealtimePeer(
     fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
         try { localVideoTrack?.removeSink(renderer) } catch (_: Exception) {}
         videoSinks.remove(renderer)
+    }
+
+    fun ensureVideoCaptureRunning() {
+        if (!streaming && !uiConnected) return
+        val capturer = cameraCapturer ?: return
+        try {
+            capturer.startCapture(1280, 720, 30)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Capture already running: ${e.message}")
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Failed to restart capture", e)
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Capture restart interrupted", e)
+            Thread.currentThread().interrupt()
+        }
     }
 
     // === DC утилиты ===
@@ -94,6 +113,7 @@ class RealtimePeer(
 
     suspend fun connect(onState: (String) -> Unit) {
         onState("init")
+        streaming = false
 
         // 1) WebRTC init
         eglBase = EglBase.create()
@@ -201,9 +221,19 @@ class RealtimePeer(
 
         // 4) Local video — ИНИЦИАЛИЗИРУЕМ ПОЛЯ (для дальнейшего switchCamera)
         camera2Enumerator = Camera2Enumerator(context)
-        val startCamName = camera2Enumerator!!.deviceNames.firstOrNull { camera2Enumerator!!.isBackFacing(it) }
-            ?: camera2Enumerator!!.deviceNames.firstOrNull()
+        val enumerator = camera2Enumerator!!
+        val preferBack = preferredCameraFacingBack
+        val startCamName = enumerator.deviceNames.firstOrNull {
+            if (preferBack) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
+        } ?: enumerator.deviceNames.firstOrNull {
+            if (preferBack) enumerator.isFrontFacing(it) else enumerator.isBackFacing(it)
+        } ?: enumerator.deviceNames.firstOrNull()
             ?: error("No cameras")
+        preferredCameraFacingBack = when {
+            enumerator.isBackFacing(startCamName) -> true
+            enumerator.isFrontFacing(startCamName) -> false
+            else -> preferredCameraFacingBack
+        }
 
         // Создаём VideoSource и SurfaceTextureHelper один раз
         videoSource = factory!!.createVideoSource(false)
@@ -293,6 +323,7 @@ class RealtimePeer(
             }, answer)
         }
 
+        streaming = true
         onState("connected")
     }
 
@@ -302,6 +333,8 @@ class RealtimePeer(
         val targetName = enumerator.deviceNames.firstOrNull {
             if (back) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
         } ?: return
+
+        preferredCameraFacingBack = back
 
         val current = cameraCapturer
         if (current != null) {
@@ -324,7 +357,13 @@ class RealtimePeer(
         }
     }
 
+    fun setPreferredCameraFacing(back: Boolean) {
+        preferredCameraFacingBack = back
+    }
+
     fun disconnect() {
+        streaming = false
+        uiConnected = false
         // Если вызвали с UI — перекинем в фон, чтобы не ловить ANR.
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             kotlinx.coroutines.GlobalScope.launch(Dispatchers.Default) { disconnect() }
@@ -384,5 +423,11 @@ class RealtimePeer(
         localAudioTrack = null
         localVideoTrack = null
         camera2Enumerator = null
+    }
+
+    fun isStreaming(): Boolean = streaming
+
+    fun setUiConnected(connected: Boolean) {
+        uiConnected = connected
     }
 }
