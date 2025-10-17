@@ -1,6 +1,8 @@
 package com.example.camtellect
 
 import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,10 +31,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,26 +66,55 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* no-op */ }
 
+    private fun requestRuntimePermissions() {
+        val requiredPermissions = buildList {
+            add(Manifest.permission.CAMERA)
+            add(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        val missing = requiredPermissions.filter { perm ->
+            ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            permsLauncher.launch(missing.toTypedArray())
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        permsLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+        requestRuntimePermissions()
 
         setContent {
             CamtellectTheme {
                 val ctx = LocalContext.current
-                var connected by remember { mutableStateOf(false) }
-                var status by remember { mutableStateOf("idle") }
+                var connected by rememberSaveable { mutableStateOf(false) }
+                var status by rememberSaveable { mutableStateOf("idle") }
+                var selectedCamera by rememberSaveable { mutableStateOf("back") }
                 val isConnecting = status == "init"
-                var showWizard by remember { mutableStateOf(false) }
+                var showWizard by rememberSaveable { mutableStateOf(false) }
 
                 val prefs = remember { ctx.getSharedPreferences("settings", MODE_PRIVATE) }
-                var wirelessIp by remember {
+                var wirelessIp by rememberSaveable {
                     mutableStateOf(prefs.getString("wireless_ip", "") ?: "")
                 }
                 val wirelessEnabled = wirelessIp.isNotEmpty()
 
                 val scope = rememberCoroutineScope()
+
+                LaunchedEffect(connected) {
+                    if (::peer.isInitialized) {
+                        peer.setUiConnected(connected)
+                    }
+                    if (connected) {
+                        VideoService.start(ctx)
+                    } else {
+                        VideoService.stop(ctx)
+                    }
+                }
 
                 LaunchedEffect(Unit) {
                     peer = RealtimePeer(
@@ -98,6 +131,13 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     )
+                    peer.setPreferredCameraFacing(selectedCamera != "front")
+                }
+
+                LaunchedEffect(selectedCamera) {
+                    if (::peer.isInitialized) {
+                        peer.setPreferredCameraFacing(selectedCamera != "front")
+                    }
                 }
 
                 val backgroundGradient = Brush.verticalGradient(
@@ -172,8 +212,24 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSelectCamera = { which ->
                                     when (which) {
-                                        "back" -> if (connected) scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = true) }
-                                        "front" -> if (connected) scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = false) }
+                                        "back" -> {
+                                            selectedCamera = "back"
+                                            if (::peer.isInitialized) {
+                                                peer.setPreferredCameraFacing(true)
+                                                if (connected) {
+                                                    scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = true) }
+                                                }
+                                            }
+                                        }
+                                        "front" -> {
+                                            selectedCamera = "front"
+                                            if (::peer.isInitialized) {
+                                                peer.setPreferredCameraFacing(false)
+                                                if (connected) {
+                                                    scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = false) }
+                                                }
+                                            }
+                                        }
                                         "wireless" -> {
                                             android.util.Log.i("APP", "Wireless selected: ip=${'$'}wirelessIp")
                                         }
@@ -302,8 +358,12 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 } else {
+                                                    val previewLens = when (selectedCamera) {
+                                                        "front" -> CameraSelector.LENS_FACING_FRONT
+                                                        else -> CameraSelector.LENS_FACING_BACK
+                                                    }
                                                     CameraXPreview(
-                                                        lensFacing = CameraSelector.LENS_FACING_BACK,
+                                                        lensFacing = previewLens,
                                                         modifier = Modifier.fillMaxSize()
                                                     )
                                                 }
@@ -338,6 +398,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        requestRuntimePermissions()
+        if (::peer.isInitialized && peer.isStreaming()) {
+            VideoService.start(this)
+            peer.ensureVideoCaptureRunning()
         }
     }
 }
