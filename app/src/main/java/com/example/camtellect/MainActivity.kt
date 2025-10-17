@@ -83,6 +83,14 @@ class MainActivity : ComponentActivity() {
 
                 val scope = rememberCoroutineScope()
 
+                LaunchedEffect(connected) {
+                    if (connected) {
+                        VideoService.start(ctx)
+                    } else {
+                        VideoService.stop(ctx)
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     peer = RealtimePeer(
                         context = this@MainActivity,
@@ -338,6 +346,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::peer.isInitialized) {
+            peer.ensureVideoCaptureRunning()
         }
     }
 }
