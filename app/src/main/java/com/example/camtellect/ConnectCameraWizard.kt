@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -314,19 +316,30 @@ fun ConnectCameraWizard(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium
                             )
-                            val html = """
-                                <html><body style=\"margin:0;padding:0;background:black;overflow:hidden;\">
-                                <img src=\"http://$ip:8080/video\" style=\"width:100vw;height:auto;display:block;\"/>
-                                </body></html>
-                            """.trimIndent()
-                            WirelessCameraView(
-                                html = html,
-                                baseUrl = "http://$ip:8080",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(16f / 9f)
-                                    .clip(RoundedCornerShape(20.dp))
-                            )
+                            if (ip.isNotEmpty()) {
+                                WirelessCameraView(
+                                    streamUrl = "http://$ip:8080/video",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(16f / 9f)
+                                        .clip(RoundedCornerShape(20.dp))
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(16f / 9f)
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "Select a camera to preview",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                     Row(
