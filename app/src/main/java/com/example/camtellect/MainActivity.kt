@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
                 var connected by rememberSaveable { mutableStateOf(false) }
                 var status by rememberSaveable { mutableStateOf("idle") }
                 var selectedCamera by rememberSaveable { mutableStateOf("back") }
+                var lastDeviceSelection by rememberSaveable { mutableStateOf("back") }
                 val isConnecting = status == "init"
                 var showWizard by rememberSaveable { mutableStateOf(false) }
                 var cameraMenuExpanded by rememberSaveable { mutableStateOf(false) }
@@ -106,6 +107,25 @@ class MainActivity : ComponentActivity() {
                 val wirelessEnabled = wirelessIp.isNotEmpty()
 
                 val scope = rememberCoroutineScope()
+
+                fun applyCameraSelection(which: String = selectedCamera, ipValue: String = wirelessIp) {
+                    if (!::peer.isInitialized) return
+                    when {
+                        which == "wireless" && ipValue.isNotEmpty() -> peer.useWirelessCamera(ipValue)
+                        which == "wireless" -> {
+                            peer.useWirelessCamera(null)
+                            peer.setPreferredCameraFacing(lastDeviceSelection != "front")
+                        }
+                        which == "front" -> {
+                            peer.useWirelessCamera(null)
+                            peer.setPreferredCameraFacing(false)
+                        }
+                        else -> {
+                            peer.useWirelessCamera(null)
+                            peer.setPreferredCameraFacing(true)
+                        }
+                    }
+                }
 
                 LaunchedEffect(connected) {
                     if (::peer.isInitialized) {
@@ -133,12 +153,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     )
-                    peer.setPreferredCameraFacing(selectedCamera != "front")
+                    applyCameraSelection()
                 }
 
                 LaunchedEffect(selectedCamera) {
                     if (::peer.isInitialized) {
-                        peer.setPreferredCameraFacing(selectedCamera != "front")
+                        applyCameraSelection()
                     }
                 }
 
@@ -220,23 +240,19 @@ class MainActivity : ComponentActivity() {
                                     when (which) {
                                         "back" -> {
                                             selectedCamera = "back"
-                                            if (::peer.isInitialized) {
-                                                peer.setPreferredCameraFacing(true)
-                                                if (connected) {
-                                                    scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = true) }
-                                                }
-                                            }
+                                            lastDeviceSelection = "back"
+                                            applyCameraSelection("back")
                                         }
                                         "front" -> {
                                             selectedCamera = "front"
-                                            if (::peer.isInitialized) {
-                                                peer.setPreferredCameraFacing(false)
-                                                if (connected) {
-                                                    scope.launch(Dispatchers.Default) { peer.switchCameraFacing(back = false) }
-                                                }
-                                            }
+                                            lastDeviceSelection = "front"
+                                            applyCameraSelection("front")
                                         }
                                         "wireless" -> {
+                                            if (wirelessEnabled) {
+                                                selectedCamera = "wireless"
+                                                applyCameraSelection("wireless")
+                                            }
                                             android.util.Log.i("APP", "Wireless selected: ip=${'$'}wirelessIp")
                                         }
                                     }
@@ -256,6 +272,12 @@ class MainActivity : ComponentActivity() {
                                 onIpChosen = { ip ->
                                     wirelessIp = ip
                                     prefs.edit().putString("wireless_ip", ip).apply()
+                                    if (ip.isBlank() && selectedCamera == "wireless") {
+                                        selectedCamera = lastDeviceSelection
+                                        applyCameraSelection(lastDeviceSelection)
+                                    } else if (selectedCamera == "wireless") {
+                                        applyCameraSelection("wireless", ip)
+                                    }
                                     showWizard = false
                                 }
                             )
@@ -361,34 +383,41 @@ class MainActivity : ComponentActivity() {
                                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
                                                 .aspectRatio(16f / 9f)
                                         ) {
-                                            Crossfade(targetState = connected) { isConnected ->
-                                                if (isConnected) {
-                                                    val egl = peer.getEglBase()
-                                                    if (egl != null) {
-                                                        RealtimeVideoView(
-                                                            eglBase = egl,
-                                                            onReady = { r -> peer.attachLocalRenderer(r) },
-                                                            onDisposeRenderer = { r -> peer.detachLocalRenderer(r) },
-                                                            modifier = Modifier.fillMaxSize(),
-                                                            mirror = selectedCamera == "front"
-                                                        )
-                                                    } else {
-                                                        Box(
-                                                            modifier = Modifier.fillMaxSize(),
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            CircularProgressIndicator()
+                                            if (selectedCamera == "wireless" && wirelessEnabled && wirelessIp.isNotEmpty()) {
+                                                WirelessCameraView(
+                                                    streamUrl = "http://$wirelessIp:8080/video",
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Crossfade(targetState = connected) { isConnected ->
+                                                    if (isConnected) {
+                                                        val egl = peer.getEglBase()
+                                                        if (egl != null) {
+                                                            RealtimeVideoView(
+                                                                eglBase = egl,
+                                                                onReady = { r -> peer.attachLocalRenderer(r) },
+                                                                onDisposeRenderer = { r -> peer.detachLocalRenderer(r) },
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                mirror = selectedCamera == "front"
+                                                            )
+                                                        } else {
+                                                            Box(
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                CircularProgressIndicator()
+                                                            }
                                                         }
+                                                    } else {
+                                                        val previewLens = when (selectedCamera) {
+                                                            "front" -> CameraSelector.LENS_FACING_FRONT
+                                                            else -> CameraSelector.LENS_FACING_BACK
+                                                        }
+                                                        CameraXPreview(
+                                                            lensFacing = previewLens,
+                                                            modifier = Modifier.fillMaxSize()
+                                                        )
                                                     }
-                                                } else {
-                                                    val previewLens = when (selectedCamera) {
-                                                        "front" -> CameraSelector.LENS_FACING_FRONT
-                                                        else -> CameraSelector.LENS_FACING_BACK
-                                                    }
-                                                    CameraXPreview(
-                                                        lensFacing = previewLens,
-                                                        modifier = Modifier.fillMaxSize()
-                                                    )
                                                 }
                                             }
                                         }

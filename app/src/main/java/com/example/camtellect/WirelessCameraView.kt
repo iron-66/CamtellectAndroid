@@ -11,8 +11,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun WirelessCameraView(
-    html: String,
-    baseUrl: String = "http://192.168.1.55:8080",
+    streamUrl: String,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -23,8 +22,18 @@ fun WirelessCameraView(
                 settings.cacheMode = WebSettings.LOAD_NO_CACHE
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
+                settings.loadsImagesAutomatically = true
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 webViewClient = WebViewClient()
-                loadDataWithBaseURL(baseUrl, html, "text/html", "UTF-8", null)
+                loadUrl(streamUrl)
+                tag = streamUrl
+            }
+        },
+        update = { view ->
+            val current = view.tag as? String
+            if (current != streamUrl) {
+                view.loadUrl(streamUrl)
+                view.tag = streamUrl
             }
         }
     )
