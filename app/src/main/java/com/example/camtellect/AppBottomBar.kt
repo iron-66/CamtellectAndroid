@@ -36,10 +36,10 @@ fun AppBottomBar(
     onDisconnect: () -> Unit,
     onSelectCamera: (String) -> Unit,  // "back" | "front" | "wireless"
     onSettingsClick: () -> Unit,
+    cameraMenuExpanded: Boolean,
+    onCameraMenuExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var cameraMenuExpanded by remember { mutableStateOf(false) }
-
     BottomAppBar(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
@@ -52,32 +52,32 @@ fun AppBottomBar(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
-                IconButton(onClick = { cameraMenuExpanded = true }) {
+                IconButton(onClick = { onCameraMenuExpandedChange(true) }) {
                     Icon(Icons.Outlined.PhotoCamera, contentDescription = "Select camera")
                 }
             }
             DropdownMenu(
                 expanded = cameraMenuExpanded,
-                onDismissRequest = { cameraMenuExpanded = false }
+                onDismissRequest = { onCameraMenuExpandedChange(false) }
             ) {
                 DropdownMenuItem(
                     text = { Text("Back camera") },
                     onClick = {
-                        cameraMenuExpanded = false
+                        onCameraMenuExpandedChange(false)
                         onSelectCamera("back")
                     }
                 )
                 DropdownMenuItem(
                     text = { Text("Front camera") },
                     onClick = {
-                        cameraMenuExpanded = false
+                        onCameraMenuExpandedChange(false)
                         onSelectCamera("front")
                     }
                 )
                 DropdownMenuItem(
                     text = { Text("Wireless camera") },
                     onClick = {
-                        cameraMenuExpanded = false
+                        onCameraMenuExpandedChange(false)
                         onSelectCamera("wireless")
                     },
                     enabled = wirelessEnabled

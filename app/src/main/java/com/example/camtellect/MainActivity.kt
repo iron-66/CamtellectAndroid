@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 var selectedCamera by rememberSaveable { mutableStateOf("back") }
                 val isConnecting = status == "init"
                 var showWizard by rememberSaveable { mutableStateOf(false) }
-
+                var cameraMenuExpanded by rememberSaveable { mutableStateOf(false) }
                 val prefs = remember { ctx.getSharedPreferences("settings", MODE_PRIVATE) }
                 var wirelessIp by rememberSaveable {
                     mutableStateOf(prefs.getString("wireless_ip", "") ?: "")
@@ -241,7 +241,12 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                onSettingsClick = { showWizard = true }
+                                onSettingsClick = { showWizard = true },
+                                cameraMenuExpanded = cameraMenuExpanded,
+                                onCameraMenuExpandedChange = { expanded ->
+                                    if (expanded) showWizard = false
+                                    cameraMenuExpanded = expanded
+                                },
                             )
                         }
                     ) { innerPadding ->
