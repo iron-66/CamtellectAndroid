@@ -13,6 +13,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -147,6 +149,10 @@ class MainActivity : ComponentActivity() {
                         MaterialTheme.colorScheme.surface
                     )
                 )
+                val StatusGreen  = Color(0xFF2E7D32)
+                val StatusAmber  = Color(0xFFF9A825)
+                val StatusRed    = MaterialTheme.colorScheme.error
+                val StatusNeutral= MaterialTheme.colorScheme.onSurfaceVariant
 
                 Box(
                     modifier = Modifier
@@ -250,17 +256,19 @@ class MainActivity : ComponentActivity() {
                             )
                         } else {
                             val statusAccent = when {
-                                status.startsWith("error", ignoreCase = true) -> MaterialTheme.colorScheme.error
-                                isConnecting -> MaterialTheme.colorScheme.tertiary
-                                connected -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.primary
+                                status.startsWith("error", ignoreCase = true) -> StatusRed
+                                isConnecting -> StatusAmber
+                                connected -> StatusGreen
+                                else -> StatusNeutral
                             }
+
                             val statusHeadline = when {
                                 status.startsWith("error", ignoreCase = true) -> "Error"
                                 isConnecting -> "Connecting"
                                 connected -> "Connected"
                                 else -> "Idle"
                             }
+
                             val statusDetails = remember(status) {
                                 status.replaceFirstChar { ch ->
                                     if (ch.isLowerCase()) ch.titlecase(Locale.getDefault()) else ch.toString()
@@ -284,27 +292,36 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.padding(24.dp),
                                         verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
-                                        Text(
-                                            text = "Status",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Surface(
-                                            color = statusAccent.copy(alpha = 0.12f),
-                                            contentColor = statusAccent,
-                                            shape = RoundedCornerShape(50)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = statusHeadline,
-                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                                style = MaterialTheme.typography.labelLarge,
-                                                fontWeight = FontWeight.Medium
+                                                text = "Status",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
+                                            Spacer(Modifier.weight(1f))
+                                            Surface(
+                                                color = statusAccent.copy(alpha = 0.12f),
+                                                contentColor = statusAccent,
+                                                shape = RoundedCornerShape(50)
+                                            ) {
+                                                Text(
+                                                    text = statusHeadline,
+                                                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1
+                                                )
+                                            }
                                         }
+
                                         Text(
                                             text = statusDetails,
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.SemiBold
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
