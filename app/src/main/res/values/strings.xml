@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Camtellect</string>
+    <string name="video_service_channel_name">Live streaming</string>
+    <string name="video_service_channel_description">Keeps the realtime video stream active while the app is in background.</string>
+    <string name="video_service_notification_title">Camtellect is live</string>
+    <string name="video_service_notification_message">Realtime video streaming is active.</string>
 </resources>

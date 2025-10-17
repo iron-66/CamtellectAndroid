@@ -18,7 +18,8 @@ fun RealtimeVideoView(
     eglBase: EglBase,
     onReady: (SurfaceViewRenderer) -> Unit,
     onDisposeRenderer: (SurfaceViewRenderer) -> Unit = {}, // прокинем peer.detachLocalRenderer
-    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+    mirror: Boolean = false
 ) {
     var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
@@ -27,7 +28,7 @@ fun RealtimeVideoView(
             SurfaceViewRenderer(ctx).apply {
                 init(eglBase.eglBaseContext, null)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                setMirror(false)
+                setMirror(mirror)
                 setEnableHardwareScaler(true)
                 setZOrderMediaOverlay(false)
                 renderer = this
@@ -35,6 +36,9 @@ fun RealtimeVideoView(
             }
         },
         modifier = modifier,
+        update = { view ->
+            view.setMirror(mirror)
+        },
         onRelease = {
             renderer?.let { onDisposeRenderer(it) }
             it.release()
