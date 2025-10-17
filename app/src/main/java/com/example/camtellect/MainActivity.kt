@@ -237,6 +237,9 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                         "wireless" -> {
+                                            if (wirelessEnabled) {
+                                                selectedCamera = "wireless"
+                                            }
                                             android.util.Log.i("APP", "Wireless selected: ip=${'$'}wirelessIp")
                                         }
                                     }
@@ -361,34 +364,41 @@ class MainActivity : ComponentActivity() {
                                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
                                                 .aspectRatio(16f / 9f)
                                         ) {
-                                            Crossfade(targetState = connected) { isConnected ->
-                                                if (isConnected) {
-                                                    val egl = peer.getEglBase()
-                                                    if (egl != null) {
-                                                        RealtimeVideoView(
-                                                            eglBase = egl,
-                                                            onReady = { r -> peer.attachLocalRenderer(r) },
-                                                            onDisposeRenderer = { r -> peer.detachLocalRenderer(r) },
-                                                            modifier = Modifier.fillMaxSize(),
-                                                            mirror = selectedCamera == "front"
-                                                        )
-                                                    } else {
-                                                        Box(
-                                                            modifier = Modifier.fillMaxSize(),
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            CircularProgressIndicator()
+                                            if (selectedCamera == "wireless" && wirelessEnabled && wirelessIp.isNotEmpty()) {
+                                                WirelessCameraView(
+                                                    streamUrl = "http://$wirelessIp:8080/video",
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Crossfade(targetState = connected) { isConnected ->
+                                                    if (isConnected) {
+                                                        val egl = peer.getEglBase()
+                                                        if (egl != null) {
+                                                            RealtimeVideoView(
+                                                                eglBase = egl,
+                                                                onReady = { r -> peer.attachLocalRenderer(r) },
+                                                                onDisposeRenderer = { r -> peer.detachLocalRenderer(r) },
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                mirror = selectedCamera == "front"
+                                                            )
+                                                        } else {
+                                                            Box(
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                CircularProgressIndicator()
+                                                            }
                                                         }
+                                                    } else {
+                                                        val previewLens = when (selectedCamera) {
+                                                            "front" -> CameraSelector.LENS_FACING_FRONT
+                                                            else -> CameraSelector.LENS_FACING_BACK
+                                                        }
+                                                        CameraXPreview(
+                                                            lensFacing = previewLens,
+                                                            modifier = Modifier.fillMaxSize()
+                                                        )
                                                     }
-                                                } else {
-                                                    val previewLens = when (selectedCamera) {
-                                                        "front" -> CameraSelector.LENS_FACING_FRONT
-                                                        else -> CameraSelector.LENS_FACING_BACK
-                                                    }
-                                                    CameraXPreview(
-                                                        lensFacing = previewLens,
-                                                        modifier = Modifier.fillMaxSize()
-                                                    )
                                                 }
                                             }
                                         }
