@@ -1,6 +1,8 @@
 package com.example.camtellect
 
 import android.content.Context
+import android.media.AudioManager
+import android.os.PowerManager
 import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -51,6 +53,11 @@ class RealtimePeer(
     private var dc: DataChannel? = null
     private var keepAliveJob: kotlinx.coroutines.Job? = null
 
+    private var audioManager: AudioManager? = null
+    private var previousAudioMode: Int? = null
+    private var previousSpeakerphoneOn: Boolean? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+
     private val videoSinks = CopyOnWriteArraySet<VideoSink>()
 
     fun getEglBase(): EglBase? = eglBase
@@ -89,6 +96,17 @@ class RealtimePeer(
 
     suspend fun connect(onState: (String) -> Unit) {
         onState("init")
+
+        acquireWakeLock()
+        try {
+            establishConnection(onState)
+        } catch (e: Exception) {
+            releaseWakeLock()
+            throw e
+        }
+    }
+
+    private suspend fun establishConnection(onState: (String) -> Unit) {
 
         // 1) WebRTC init
         eglBase = EglBase.create()
@@ -169,6 +187,19 @@ class RealtimePeer(
                 }
                 override fun onMessage(buffer: DataChannel.Buffer) { /* optional logs */ }
             })
+        }
+
+        // Настроим маршрутизацию аудио на громкий динамик
+        audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManager?.let { manager ->
+            previousAudioMode = manager.mode
+            previousSpeakerphoneOn = manager.isSpeakerphoneOn
+            try {
+                manager.mode = AudioManager.MODE_IN_COMMUNICATION
+                manager.isSpeakerphoneOn = true
+            } catch (_: Exception) {
+                // Если не удалось изменить режим, не прерываем соединение
+            }
         }
 
         // 3) Local audio (Opus по умолчанию)
@@ -306,6 +337,29 @@ class RealtimePeer(
         }
     }
 
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$TAG:Realtime").apply {
+            setReferenceCounted(false)
+            try {
+                acquire()
+            } catch (_: Exception) {
+                // Игнорируем — если не получилось, продолжаем без wake lock
+            }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { lock ->
+            try {
+                if (lock.isHeld) lock.release()
+            } catch (_: Exception) {
+            }
+        }
+        wakeLock = null
+    }
+
     fun disconnect() {
         // Если вызвали с UI — перекинем в фон, чтобы не ловить ANR.
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
@@ -351,9 +405,22 @@ class RealtimePeer(
         try { eglBase?.release() } catch (_: Exception) {}
         eglBase = null
 
-        // 7) Обнулить ссылки
+        // 7) Вернём настройки аудио, чтобы не ломать системное поведение
+        audioManager?.let { manager ->
+            try {
+                previousAudioMode?.let { manager.mode = it }
+                previousSpeakerphoneOn?.let { manager.isSpeakerphoneOn = it }
+            } catch (_: Exception) {}
+        }
+        previousAudioMode = null
+        previousSpeakerphoneOn = null
+        audioManager = null
+
+        // 8) Обнулить ссылки
         localAudioTrack = null
         localVideoTrack = null
         camera2Enumerator = null
+
+        releaseWakeLock()
     }
 }
