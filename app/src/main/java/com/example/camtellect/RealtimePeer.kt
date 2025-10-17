@@ -72,6 +72,20 @@ class RealtimePeer(
         videoSinks.remove(renderer)
     }
 
+    fun ensureVideoCaptureRunning() {
+        val capturer = cameraCapturer ?: return
+        try {
+            capturer.startCapture(1280, 720, 30)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Capture already running: ${e.message}")
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Failed to restart capture", e)
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Capture restart interrupted", e)
+            Thread.currentThread().interrupt()
+        }
+    }
+
     // === DC утилиты ===
     private fun DataChannel.sendJson(json: String) {
         val data = java.nio.ByteBuffer.wrap(json.toByteArray(Charsets.UTF_8))
