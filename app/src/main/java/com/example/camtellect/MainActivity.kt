@@ -218,7 +218,11 @@ class MainActivity : ComponentActivity() {
                                             peer.connect { s -> status = s }
                                         } catch (e: Exception) {
                                             withContext(Dispatchers.Main) {
-                                                status = "error: ${'$'}{e.message}"
+                                                status = if (e.message?.contains("Realtime HTTP 403", ignoreCase = true) == true) {
+                                                    "error: Unsupported country"
+                                                } else {
+                                                    "error: ${e.message ?: e.javaClass.simpleName ?: "Unknown error"}"
+                                                }
                                                 connected = false
                                             }
                                         }
