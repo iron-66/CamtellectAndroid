@@ -1,19 +1,29 @@
 package com.example.camtellect
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.webrtc.*
+import org.webrtc.JavaI420Buffer
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
+import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -46,6 +56,17 @@ class RealtimePeer(
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var cameraCapturer: CameraVideoCapturer? = null
     @Volatile private var preferredCameraFacingBack: Boolean = true
+    @Volatile private var currentCameraFacingBack: Boolean? = null
+
+    private sealed interface CaptureMode {
+        data class DeviceCamera(val back: Boolean) : CaptureMode
+        data class Wireless(val ip: String) : CaptureMode
+    }
+
+    @Volatile private var captureMode: CaptureMode = CaptureMode.DeviceCamera(back = true)
+
+    private val captureScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var wirelessJob: Job? = null
 
     private var localAudioTrack: AudioTrack? = null
     private var localVideoTrack: VideoTrack? = null
@@ -90,6 +111,179 @@ class RealtimePeer(
             Thread.currentThread().interrupt()
         }
     }
+
+    fun useWirelessCamera(ip: String?) {
+        val normalized = ip?.trim()?.takeIf { it.isNotEmpty() }
+        val current = captureMode
+        if (normalized == null) {
+            captureMode = CaptureMode.DeviceCamera(preferredCameraFacingBack)
+            if (current is CaptureMode.DeviceCamera) {
+                return
+            }
+            captureScope.launch { startDeviceCameraCapture(preferredCameraFacingBack) }
+        } else {
+            if (current is CaptureMode.Wireless && current.ip == normalized) {
+                return
+            }
+            captureMode = CaptureMode.Wireless(normalized)
+            captureScope.launch { startWirelessCapture(normalized) }
+        }
+    }
+
+    private fun startDeviceCameraCapture(back: Boolean) {
+        val observer = videoSource?.capturerObserver ?: return
+        val egl = eglBase ?: return
+        stopWirelessJob()
+
+        val enumerator = camera2Enumerator ?: Camera2Enumerator(context).also { camera2Enumerator = it }
+        val preferBack = back
+        val targetName = enumerator.deviceNames.firstOrNull {
+            if (preferBack) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
+        } ?: enumerator.deviceNames.firstOrNull {
+            if (preferBack) enumerator.isFrontFacing(it) else enumerator.isBackFacing(it)
+        } ?: enumerator.deviceNames.firstOrNull() ?: run {
+            Log.e(TAG, "No cameras available for capture")
+            return
+        }
+
+        if (surfaceHelper == null) {
+            surfaceHelper = SurfaceTextureHelper.create("CaptureThread", egl.eglBaseContext)
+        }
+
+        try { cameraCapturer?.stopCapture() } catch (_: Exception) {}
+        try { cameraCapturer?.dispose() } catch (_: Exception) {}
+
+        val helper = surfaceHelper ?: return
+        cameraCapturer = (enumerator.createCapturer(targetName, null) as CameraVideoCapturer).also { cap ->
+            cap.initialize(helper, context, observer)
+            try {
+                cap.startCapture(1280, 720, 30)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start camera capture", e)
+            }
+        }
+        currentCameraFacingBack = enumerator.isBackFacing(targetName)
+    }
+
+    private fun startWirelessCapture(ip: String) {
+        val observer = videoSource?.capturerObserver ?: return
+        stopWirelessJob()
+        currentCameraFacingBack = null
+
+        val trimmed = ip.trim()
+        val hasScheme = trimmed.contains("://")
+        val base = if (hasScheme) {
+            trimmed.trimEnd('/')
+        } else {
+            val withPort = if (":" in trimmed) trimmed else "$trimmed:8080"
+            "http://$withPort"
+        }
+        val sanitized = base.trimEnd('/')
+        val frameUrl = when {
+            sanitized.endsWith("/video", ignoreCase = true) ->
+                sanitized.substring(0, sanitized.length - "/video".length) + "/shot.jpg"
+            sanitized.lowercase().endsWith("/shot.jpg") -> sanitized
+            sanitized.lowercase().contains("/shot.jpg") -> sanitized
+            else -> "$sanitized/shot.jpg"
+        }
+
+        wirelessJob = captureScope.launch {
+            observer.onCapturerStarted(true)
+            val client = OkHttpClient.Builder()
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(3, TimeUnit.SECONDS)
+                .build()
+            try {
+                while (isActive && captureMode is CaptureMode.Wireless && (captureMode as CaptureMode.Wireless).ip == ip) {
+                    val bitmap = try {
+                        val request = Request.Builder().url(frameUrl).build()
+                        client.newCall(request).execute().use { resp ->
+                            if (!resp.isSuccessful) {
+                                throw IOException("Wireless frame HTTP ${resp.code}")
+                            }
+                            val bytes = resp.body?.bytes()
+                            if (bytes == null) {
+                                throw IOException("Empty frame body")
+                            }
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                ?: throw IOException("Unable to decode bitmap")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Wireless frame fetch failed", e)
+                        delay(500)
+                        continue
+                    }
+
+                    val frame = try {
+                        bitmapToVideoFrame(bitmap)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Wireless frame conversion failed", e)
+                        bitmap.recycle()
+                        delay(200)
+                        continue
+                    }
+
+                    observer.onFrameCaptured(frame)
+                    frame.release()
+                    bitmap.recycle()
+                    delay(66)
+                }
+            } finally {
+                observer.onCapturerStopped()
+            }
+        }
+    }
+
+    private fun stopWirelessJob() {
+        wirelessJob?.cancel()
+        wirelessJob = null
+    }
+
+    private fun bitmapToVideoFrame(bitmap: Bitmap): VideoFrame {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) {
+            throw IllegalArgumentException("Invalid bitmap dimensions")
+        }
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val buffer = JavaI420Buffer.allocate(width, height)
+        val yPlane = buffer.dataY
+        val uPlane = buffer.dataU
+        val vPlane = buffer.dataV
+        val yStride = buffer.strideY
+        val uStride = buffer.strideU
+        val vStride = buffer.strideV
+
+        for (row in 0 until height) {
+            val rowOffset = row * width
+            val yRowStart = row * yStride
+            val uRowStart = (row / 2) * uStride
+            val vRowStart = (row / 2) * vStride
+            for (col in 0 until width) {
+                val color = pixels[rowOffset + col]
+                val r = (color shr 16) and 0xFF
+                val g = (color shr 8) and 0xFF
+                val b = color and 0xFF
+
+                val yValue = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                val uValue = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                val vValue = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+
+                yPlane.put(yRowStart + col, clampToByte(yValue))
+                if (row % 2 == 0 && col % 2 == 0) {
+                    val uvIndex = (col / 2)
+                    uPlane.put(uRowStart + uvIndex, clampToByte(uValue))
+                    vPlane.put(vRowStart + uvIndex, clampToByte(vValue))
+                }
+            }
+        }
+
+        return VideoFrame(buffer, 0, System.nanoTime())
+    }
+
+    private fun clampToByte(value: Int): Byte = value.coerceIn(0, 255).toByte()
 
     // === DC утилиты ===
     private fun DataChannel.sendJson(json: String) {
@@ -219,30 +413,13 @@ class RealtimePeer(
         localAudioTrack = factory!!.createAudioTrack("audio0", audioSource).apply { setEnabled(true) }
         pc!!.addTrack(localAudioTrack, listOf("stream0"))
 
-        // 4) Local video — ИНИЦИАЛИЗИРУЕМ ПОЛЯ (для дальнейшего switchCamera)
-        camera2Enumerator = Camera2Enumerator(context)
-        val enumerator = camera2Enumerator!!
-        val preferBack = preferredCameraFacingBack
-        val startCamName = enumerator.deviceNames.firstOrNull {
-            if (preferBack) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
-        } ?: enumerator.deviceNames.firstOrNull {
-            if (preferBack) enumerator.isFrontFacing(it) else enumerator.isBackFacing(it)
-        } ?: enumerator.deviceNames.firstOrNull()
-            ?: error("No cameras")
-        preferredCameraFacingBack = when {
-            enumerator.isBackFacing(startCamName) -> true
-            enumerator.isFrontFacing(startCamName) -> false
-            else -> preferredCameraFacingBack
-        }
-
-        // Создаём VideoSource и SurfaceTextureHelper один раз
+        // 4) Local video — создаём source и запускаем выбранный режим
         videoSource = factory!!.createVideoSource(false)
         surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase!!.eglBaseContext)
 
-        // Создаём CameraVideoCapturer на выбранную камеру и запускаем
-        cameraCapturer = (camera2Enumerator!!.createCapturer(startCamName, null) as CameraVideoCapturer).also { cap ->
-            cap.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
-            cap.startCapture(1280, 720, 30)
+        when (val mode = captureMode) {
+            is CaptureMode.DeviceCamera -> startDeviceCameraCapture(mode.back)
+            is CaptureMode.Wireless -> startWirelessCapture(mode.ip)
         }
 
         localVideoTrack = factory!!.createVideoTrack("video0", videoSource).apply { setEnabled(true) }
@@ -329,36 +506,17 @@ class RealtimePeer(
 
     /** Переключение камеры: пытаемся именованным API, иначе мягко пересоздаём капчер. */
     suspend fun switchCameraFacing(back: Boolean) {
-        val enumerator = camera2Enumerator ?: return
-        val targetName = enumerator.deviceNames.firstOrNull {
-            if (back) enumerator.isBackFacing(it) else enumerator.isFrontFacing(it)
-        } ?: return
-
-        preferredCameraFacingBack = back
-
-        val current = cameraCapturer
-        if (current != null) {
-            // Попробуем именованный switchCamera(handler, cameraName) — есть во многих сборках
-            try {
-                current.switchCamera(null /* handler */, targetName)
-                return
-            } catch (_: Throwable) {
-                // В некоторых артефактах есть только switchCamera(handler) — fallback ниже
-            }
-        }
-
-        // Fallback: мягко пересоздаём CameraVideoCapturer с нужным именем
-        try { cameraCapturer?.stopCapture() } catch (_: Exception) {}
-        try { cameraCapturer?.dispose() } catch (_: Exception) {}
-
-        cameraCapturer = (enumerator.createCapturer(targetName, null) as CameraVideoCapturer).also { cap ->
-            cap.initialize(surfaceHelper, context, videoSource!!.capturerObserver)
-            cap.startCapture(1280, 720, 30)
-        }
+        setPreferredCameraFacing(back)
     }
 
     fun setPreferredCameraFacing(back: Boolean) {
         preferredCameraFacingBack = back
+        captureMode = CaptureMode.DeviceCamera(back)
+        if (currentCameraFacingBack == back && cameraCapturer != null) {
+            ensureVideoCaptureRunning()
+            return
+        }
+        captureScope.launch { startDeviceCameraCapture(back) }
     }
 
     fun disconnect() {
@@ -393,6 +551,9 @@ class RealtimePeer(
         try { cameraCapturer?.stopCapture() } catch (_: Exception) {}
         try { cameraCapturer?.dispose() } catch (_: Exception) {}
         cameraCapturer = null
+        stopWirelessJob()
+        captureScope.coroutineContext.cancelChildren()
+        currentCameraFacingBack = null
 
         // 5) Освободить низкоуровневые ресурсы
         try { videoSource?.dispose() } catch (_: Exception) {}
@@ -423,6 +584,7 @@ class RealtimePeer(
         localAudioTrack = null
         localVideoTrack = null
         camera2Enumerator = null
+        captureMode = CaptureMode.DeviceCamera(back = true)
     }
 
     fun isStreaming(): Boolean = streaming
